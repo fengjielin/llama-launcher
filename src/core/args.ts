@@ -299,7 +299,10 @@ export function buildArgs(input: BuildInput): BuildResult {
       note: "router 模式：网页左上角可随时切换模型，无需重启",
     });
     if (!config.models_dir) {
-      warnings.push("router 模式但没有设置 models_dir，llama-server 启动后会没有任何可用模型");
+      warnings.push(
+        "router 模式但没有设置 models_dir，llama-server 启动后会没有任何可用模型"
+          + "（presets.ini 只负责给模型覆盖参数，不能代替模型目录）",
+      );
     }
   }
 

@@ -103,10 +103,26 @@ export interface BootstrapPayload {
    * 与 warnings 分开，是为了不把"刚生成好配置"这种好消息渲染成一条警告。
    */
   notices: string[];
+  /**
+   * 探测到的、可以一键填入的路径（值为空串表示没探到）。
+   *
+   * 界面用它渲染「填入 …」按钮：输入框为空时那行灰色文字只是**示例**而不是值，
+   * 真正探到的路径走这里 —— 免得用户以为已经设过了（踩过：以为 `models_dir` 有默认值，
+   * 切到 router 后被告警"没有任何可用模型"）。
+   */
+  suggestions: PathSuggestions;
   schema: SchemaPayload;
   platform: string;
   /** true = 当前运行在 Electron 里；false = 浏览器回退壳 */
   inDesktopShell: boolean;
+}
+
+/** 见 {@link BootstrapPayload.suggestions}：只包含**确实存在**的路径 */
+export interface PathSuggestions {
+  /** llama.cpp 同级的 `models` 目录（存在才有值，否则空串） */
+  modelsDir: string;
+  /** 探测到的 `presets.ini` 完整路径（存在才有值，否则空串） */
+  presetPath: string;
 }
 
 export interface DetectPayload {

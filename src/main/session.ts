@@ -8,7 +8,15 @@
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { formatArgv } from "../core/args.ts";
-import { DEFAULT_CONFIG, discoverLlamaDir, loadConfigFile, normalizeConfig, resolveServerExe, saveConfigFile } from "../core/config.ts";
+import {
+  DEFAULT_CONFIG,
+  discoverLlamaDir,
+  discoverModelLayout,
+  loadConfigFile,
+  normalizeConfig,
+  resolveServerExe,
+  saveConfigFile,
+} from "../core/config.ts";
 import { fetchHealth, findFreePort, probeTcp } from "../core/health.ts";
 import { createCapabilities } from "../core/helpProbe.ts";
 import { prepareLaunch, probeServer } from "../core/launcher.ts";
@@ -145,18 +153,30 @@ export class LauncherSession {
    * 从磁盘重读配置；**文件不存在就生成一份默认配置**。
    *
    * 首次运行的流程刻意做成"生成 → 重新读一遍"：
-   * 1. 用默认值 + 自动探测到的 llama.cpp 目录拼出初始配置，写到磁盘
+   * 1. 用默认值 + 自动探测到的布局（llama.cpp 目录、`models` 目录、`presets.ini`、预加载模型）
+   *    拼出初始配置，写到磁盘
    * 2. **把它当普通配置文件重新读一遍**（`loadConfigFile`），用读回来的结果作为当前配置
    *
    * 第 2 步不是多余的：这样"首次运行的内存状态"与"第二次启动读文件的状态"完全一致，
    * 不会出现"这次能用、下次启动表现不同"的怪现象（归一化的效果也一次到位）。
    *
+   * 探测规则与 CLI 的 `init` 共用 {@link discoverModelLayout}。早先这里只探 llama.cpp 目录，
+   * 于是打包版第一次运行拿到的配置是 `mode: single` + 空的 `models_dir`，
+   * 用户一切到 router 就被告警"没有任何可用模型"（踩过）。
+   *
    * 目标位置不可写（只读目录）时不影响使用，只是退化成"用内存里的默认值"并给出告警。
    */
   private reloadConfig(): void {
     if (!existsSync(this.configPath)) {
-      const discovered = discoverLlamaDir(this.searchStartDirs());
-      const initial: LauncherConfig = { ...DEFAULT_CONFIG, llama_dir: discovered ?? "" };
+      const layout = discoverModelLayout({ startDirs: this.searchStartDirs() });
+      const initial: LauncherConfig = {
+        ...DEFAULT_CONFIG,
+        llama_dir: layout.llamaDir ?? "",
+        mode: layout.mode,
+        models_dir: layout.modelsDirExists ? layout.modelsDirCandidate : "",
+        models_preset: layout.presetPath,
+        preload_model: layout.preloadModel,
+      };
 
       try {
         saveConfigFile(this.configPath, initial);
@@ -168,7 +188,9 @@ export class LauncherSession {
           `配置文件不存在（${this.configPath}），且无法写入：${err instanceof Error ? err.message : String(err)}`,
           "当前使用内存里的默认值 —— 修改参数后请用「另存为」选一个可写的位置",
         ];
-        if (discovered === null) this.configWarnings.push("没能自动探测到 llama.cpp 目录，请在界面里指定（或设置环境变量 LLAMA_DIR）");
+        if (layout.llamaDir === null) {
+          this.configWarnings.push("没能自动探测到 llama.cpp 目录，请在界面里指定（或设置环境变量 LLAMA_DIR）");
+        }
         return;
       }
 
@@ -176,12 +198,20 @@ export class LauncherSession {
       this.config = reloaded.config;
       this.configNotices = [`首次运行：已在 ${this.configPath} 生成默认配置（可以直接编辑这个文件）`];
       this.configWarnings = [...reloaded.warnings];
-      if (discovered !== null) {
-        this.configNotices.push(`已自动探测到 llama.cpp 目录：${discovered}`);
+      if (layout.llamaDir !== null) {
+        this.configNotices.push(`已自动探测到 llama.cpp 目录：${layout.llamaDir}`);
       } else {
         this.configWarnings.push(
           "没能自动探测到 llama.cpp 目录，请在左侧「构建目录」里指定（或设置环境变量 LLAMA_DIR / LLAMA_SERVER）",
         );
+      }
+      // 探到什么都如实说出来：模型目录与 presets.ini 直接决定了 router 模式能不能用
+      if (layout.modelsDirExists) this.configNotices.push(`已自动探测到模型目录：${layout.modelsDirCandidate}`);
+      if (layout.presetPath !== "") {
+        this.configNotices.push(`已自动探测到 presets.ini：${layout.presetPath}（运行模式已设为 router）`);
+      }
+      if (layout.preloadModel !== "") {
+        this.configNotices.push(`按 presets.ini 的 default-model 约定设置了预加载：${layout.preloadModel}`);
       }
       return;
     }
@@ -192,6 +222,28 @@ export class LauncherSession {
     this.configNotices = [];
   }
 
+  /**
+   * 给界面用的"可以一键填入的路径"。
+   *
+   * 界面上的输入框为空时，用户看到的灰色文字只是提示示例、**不是值** ——
+   * 早先有人因此以为已经设过 `models_dir`，切到 router 就被"没有任何可用模型"告警（踩过）。
+   * 这里把真正探测到的候选给界面，它就能显示一个「填入 …」按钮。
+   *
+   * 只报告**确实存在**的东西：不存在的目录给了按钮，用户点完还是错的。
+   *
+   * @returns `modelsDir` / `presetPath`，没探到的为空串
+   */
+  private pathSuggestions(): { modelsDir: string; presetPath: string } {
+    const layout = discoverModelLayout({
+      startDirs: this.searchStartDirs(),
+      explicitLlamaDir: this.config.llama_dir !== "" ? this.config.llama_dir : null,
+    });
+    return {
+      modelsDir: layout.modelsDirExists ? layout.modelsDirCandidate : "",
+      presetPath: layout.presetPath,
+    };
+  }
+
   /** 把当前会话状态打包成界面初始化所需的载荷（含参数表与支持情况） */
   private bootstrapPayload(): BootstrapPayload {
     return {
@@ -199,6 +251,7 @@ export class LauncherSession {
       config: this.config,
       warnings: this.configWarnings,
       notices: this.configNotices,
+      suggestions: this.pathSuggestions(),
       schema: buildSchemaPayload(this.capabilities()),
       platform: process.platform,
       inDesktopShell: true,

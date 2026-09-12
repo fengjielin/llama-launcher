@@ -12,12 +12,11 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { DEFAULT_CONFIG, discoverLlamaDir, loadConfigFile, saveConfigFile } from "./core/config.ts";
+import { join } from "node:path";
+import { DEFAULT_CONFIG, discoverLlamaDir, discoverModelLayout, loadConfigFile, saveConfigFile } from "./core/config.ts";
 import { describeSteps, formatArgv } from "./core/args.ts";
 import { prepareLaunch, probeServer, summarizeCapabilities } from "./core/launcher.ts";
 import { createCapabilities } from "./core/helpProbe.ts";
-import { parsePresetsIni } from "./core/presets.ts";
 import { LlamaServer } from "./core/llamaProcess.ts";
 import { baseUrlOf, fetchHealth, findFreePort, probeTcp } from "./core/health.ts";
 import { classify } from "./core/logLines.ts";
@@ -397,9 +396,9 @@ async function cmdRun(flags: Flags): Promise<number> {
 /**
  * `init`：按当前机器的实际情况生成一份可直接用的配置。
  *
- * 自动完成三件事：探测 llama.cpp 目录（决定 `llama_dir`）、找同级的 `models` 目录与
- * `presets.ini`（决定 `mode` 与 `models_dir` / `models_preset`）、
- * 读 presets 的 `[defaults]` 约定决定是否预加载 —— 生成的配置与既有脚本的行为保持一致。
+ * 探测规则全部来自 core 的 {@link discoverModelLayout}（与界面「首次运行自动生成配置」共用同一份实现）：
+ * llama.cpp 目录 → 同级 `models` 目录 → `presets.ini`（据此定 mode）→ presets 的 `[defaults]`
+ * 约定决定是否预加载。这样命令行生成的配置与首次运行生成的配置不会出现两套行为。
  *
  * @param flags 命令行开关：`--config` / `--llama-dir` / `--force`
  * @returns 退出码：写入成功 `0`；文件已存在且没给 `--force` 时 `1`（不覆盖用户配置）
@@ -411,30 +410,18 @@ function cmdInit(flags: Flags): number {
     console.error(`配置文件已存在：${path}（加 --force 覆盖）`);
     return 1;
   }
-  const llamaDir = flagString(flags, "llama-dir") ?? discoverLlamaDir([process.cwd()]) ?? "";
-  const parent = llamaDir !== "" ? dirname(llamaDir) : process.cwd();
-
-  const modelsDir = join(parent, "models");
-  const presetCandidates = [join(parent, "presets.ini"), join(parent, "一键启动脚本", "presets.ini")];
-  const preset = presetCandidates.find((p) => existsSync(p)) ?? "";
-
-  // presets.ini 的 [defaults] 段可以约定 `; default-model = xxx` 来指定启动预加载的模型。
-  // 实测（以及 PS1 的读取逻辑）注释形式也生效，所以生成的配置要跟当前行为保持一致。
-  let preload = "";
-  if (preset !== "") {
-    const parsed = parsePresetsIni(readFileSync(preset, "utf8"));
-    if (parsed.defaultModel !== null && existsSync(join(modelsDir, `${parsed.defaultModel}.gguf`))) {
-      preload = parsed.defaultModel;
-    }
-  }
+  const layout = discoverModelLayout({
+    startDirs: [process.cwd()],
+    explicitLlamaDir: flagString(flags, "llama-dir"),
+  });
 
   const config: LauncherConfig = {
     ...DEFAULT_CONFIG,
-    llama_dir: llamaDir,
-    mode: preset !== "" ? "router" : "single",
-    models_dir: existsSync(modelsDir) ? modelsDir : "",
-    models_preset: preset,
-    preload_model: preload,
+    llama_dir: layout.llamaDir ?? "",
+    mode: layout.mode,
+    models_dir: layout.modelsDirExists ? layout.modelsDirCandidate : "",
+    models_preset: layout.presetPath,
+    preload_model: layout.preloadModel,
   };
   saveConfigFile(path, config);
   console.log(`已写入配置：${path}`);
@@ -442,7 +429,7 @@ function cmdInit(flags: Flags): number {
   console.log(`  mode         ：${config.mode}`);
   console.log(`  models_dir   ：${config.models_dir || "（未探测到）"}`);
   console.log(`  models_preset：${config.models_preset || "（未探测到）"}`);
-  console.log(`  preload_model：${preload || "（不预加载，首次请求才加载）"}`);
+  console.log(`  preload_model：${config.preload_model || "（不预加载，首次请求才加载）"}`);
   return 0;
 }
 

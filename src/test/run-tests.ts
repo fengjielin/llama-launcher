@@ -29,6 +29,7 @@ import "./paths.test.ts";
 
 // ---- 首次运行、自动探测与数据落点 ----
 import "./discover.test.ts";
+import "./modelLayout.test.ts";
 
 // ---- 关窗行为（智能 ✕ 的决策表）----
 import "./closePolicy.test.ts";

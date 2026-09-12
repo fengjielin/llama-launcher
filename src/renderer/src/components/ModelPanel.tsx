@@ -2,11 +2,21 @@ import { useState } from "react";
 import type { LauncherController } from "../hooks/useLauncher.ts";
 import { Badge, Button, NumberInput, Select, TextInput, Toggle } from "./ui.tsx";
 
+/**
+ * 一行"路径"输入：标签 + 浏览按钮 + 输入框 + 可选提示。
+ *
+ * `suggestion` 是主进程**真正探测到**的候选路径：字段为空时渲染一个「填入」按钮。
+ * 之所以要有它：输入框里的灰色文字只是 `placeholder`（示例），不是值 ——
+ * 早先有人把示例当成默认值，以为 `models_dir` 已经设好，切到 router 就被
+ * "没有任何可用模型"告警（踩过）。灰字能少则少，可点的按钮才是真东西。
+ */
 function PathRow({
   label,
   value,
   placeholder,
   hint,
+  suggestion,
+  onUseSuggestion,
   onPick,
   onChange,
 }: {
@@ -14,9 +24,14 @@ function PathRow({
   value: string;
   placeholder?: string;
   hint?: string;
+  /** 探测到的候选路径；空串表示没探到 */
+  suggestion?: string;
+  /** 点「填入」时调用；不传则即使有 suggestion 也不显示按钮 */
+  onUseSuggestion?: (path: string) => void;
   onPick: () => void;
   onChange: (next: string | null) => void;
 }) {
+  const canFill = value === "" && suggestion !== undefined && suggestion !== "" && onUseSuggestion !== undefined;
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between gap-2">
@@ -26,6 +41,16 @@ function PathRow({
         </Button>
       </div>
       <TextInput mono value={value} placeholder={placeholder} onChange={(next) => onChange(next === "" ? null : next)} />
+      {canFill ? (
+        <div className="flex items-center gap-1.5">
+          <Button className="px-1.5 py-0.5" onClick={() => onUseSuggestion(suggestion)}>
+            填入探测值
+          </Button>
+          <span className="mono truncate text-[10px] text-slate-500" title={suggestion}>
+            {suggestion}
+          </span>
+        </div>
+      ) : null}
       {hint !== undefined ? <p className="text-[10px] leading-4 text-slate-500">{hint}</p> : null}
     </div>
   );
@@ -41,6 +66,7 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
     profiles,
     profilesDir,
     settings,
+    suggestions,
     update,
     pick,
     start,
@@ -133,8 +159,10 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
             <PathRow
               label="模型目录（--models-dir）"
               value={typeof config.models_dir === "string" ? config.models_dir : ""}
-              placeholder="E:\Code\llama\models"
-              hint="目录里的 .gguf 会被自动识别；分片模型请各自放独立子目录"
+              placeholder="点「浏览…」或「填入探测值」"
+              hint="router 模式必须有它：llama-server 靠这个目录列出可用模型，空着起来后一个模型都没有（presets.ini 不能代替它）"
+              suggestion={suggestions.modelsDir}
+              onUseSuggestion={(path) => update({ models_dir: path })}
               onPick={() => void pick("models_dir", "directory", "选择模型目录")}
               onChange={(next) => update({ models_dir: next ?? "" })}
             />
@@ -142,7 +170,9 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
               label="模型预设文件（--models-preset）"
               value={typeof config.models_preset === "string" ? config.models_preset : ""}
               placeholder="…\presets.ini"
-              hint="路径含中文时会自动拷到临时目录再传（直接传会让 llama-server 崩退）"
+              hint="可选：只负责给各模型覆盖参数；路径含中文时会自动拷到临时目录再传（直接传会让 llama-server 崩退）"
+              suggestion={suggestions.presetPath}
+              onUseSuggestion={(path) => update({ models_preset: path })}
               onPick={() => void pick("models_preset", "ini", "选择 presets.ini")}
               onChange={(next) => update({ models_preset: next ?? "" })}
             />

@@ -12,6 +12,7 @@
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { parsePresetsIni } from "./presets.ts";
 import type { LauncherConfig, ServerMode, ThinkingMode } from "./types.ts";
 
 /** 由 llama.cpp 自己决定的值：直接不传，比人肉猜准 */
@@ -449,4 +450,89 @@ export function discoverLlamaDir(
     }
   }
   return null;
+}
+
+/** {@link discoverModelLayout} 的结果 */
+export interface ModelLayout {
+  /** 探测到的 llama.cpp 目录（`llama-server.exe` 所在目录）；没有则为 `null` */
+  llamaDir: string | null;
+  /** llama.cpp 同级的 `models` 目录**候选路径**（`llamaDir` 未知时为空串，且不保证存在） */
+  modelsDirCandidate: string;
+  /** 上面那个候选目录是否真的存在 */
+  modelsDirExists: boolean;
+  /** 实际存在的 `presets.ini`（先看同级，再看「一键启动脚本」子目录）；没有则为空串 */
+  presetPath: string;
+  /** 按 presets.ini 的 `; default-model =` 约定推出的预加载模型名（且模型文件确实在）；没有则为空串 */
+  preloadModel: string;
+  /** 建议的运行模式：有 presets.ini 就是 router（与既有 PS1 脚本及 `init` 的行为一致） */
+  mode: ServerMode;
+}
+
+/**
+ * 探测「模型相关的布局」：llama.cpp 目录 → 同级 models 目录 → presets.ini → 预加载模型。
+ *
+ * 为什么把这件事抽到 core：同一套规则原先只写在 CLI 的 `init` 里，而界面**首次运行生成配置**时
+ * 只探了 llama.cpp 目录 —— 于是打包版第一次跑拿到的配置是 `mode: single` + 空的 `models_dir`，
+ * 用户一切到 router 就被告警"没有任何可用模型"（踩过）。两边共用同一份实现之后，
+ * 首次运行也能一次探齐，而且这份规则本身可以被单测覆盖。
+ *
+ * 判据全部是"文件确实存在"，不做更聪明的猜测：
+ * - `models` 目录：`<llamaDir 的父目录>/models`
+ * - `presets.ini`：`<父目录>/presets.ini`，其次 `<父目录>/一键启动脚本/presets.ini`
+ *
+ * @param input 起始目录、已显式指定的 llama.cpp 目录（给了就不再回溯）、环境变量与回溯层数
+ * @returns 见 {@link ModelLayout}
+ */
+export function discoverModelLayout(input: {
+  startDirs: readonly string[];
+  explicitLlamaDir?: string | null;
+  env?: NodeJS.ProcessEnv;
+  maxUpLevels?: number;
+}): ModelLayout {
+  const explicit = input.explicitLlamaDir;
+  const llamaDir =
+    explicit !== undefined && explicit !== null && explicit !== ""
+      ? explicit
+      : discoverLlamaDir(input.startDirs, input.env ?? process.env, input.maxUpLevels ?? 3);
+
+  if (llamaDir === null) {
+    return {
+      llamaDir: null,
+      modelsDirCandidate: "",
+      modelsDirExists: false,
+      presetPath: "",
+      preloadModel: "",
+      mode: "single",
+    };
+  }
+
+  const parent = dirname(llamaDir);
+  const modelsDirCandidate = join(parent, "models");
+  const modelsDirExists = existsSync(modelsDirCandidate);
+
+  const presetCandidates = [join(parent, "presets.ini"), join(parent, "一键启动脚本", "presets.ini")];
+  const presetPath = presetCandidates.find((candidate) => existsSync(candidate)) ?? "";
+
+  // presets.ini 的 [defaults] 段可以约定 `; default-model = xxx`（注释形式也生效，实测过），
+  // 既有 PS1 会照此预加载 —— 生成的配置要与当前行为保持一致。模型文件不存在就不设，免得启动即失败。
+  let preloadModel = "";
+  if (presetPath !== "") {
+    try {
+      const parsed = parsePresetsIni(readFileSync(presetPath, "utf8"));
+      if (parsed.defaultModel !== null && existsSync(join(modelsDirCandidate, `${parsed.defaultModel}.gguf`))) {
+        preloadModel = parsed.defaultModel;
+      }
+    } catch {
+      // presets.ini 读不出来（权限/编码坏了）不该让整个探测失败：预加载留空即可
+    }
+  }
+
+  return {
+    llamaDir,
+    modelsDirCandidate,
+    modelsDirExists,
+    presetPath,
+    preloadModel,
+    mode: presetPath !== "" ? "router" : "single",
+  };
 }

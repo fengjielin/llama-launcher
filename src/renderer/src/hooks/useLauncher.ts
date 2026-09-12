@@ -11,6 +11,7 @@ import type {
   DetectPayload,
   LogPush,
   MetricsPayload,
+  PathSuggestions,
   PickKind,
   PreviewPayload,
   SchemaPayload,
@@ -42,6 +43,8 @@ export interface LauncherController {
   warnings: string[];
   /** 中性通知（如「首次运行已生成默认配置」），界面上以 ℹ 展示而不是 ⚠ */
   notices: string[];
+  /** 探测到的可一键填入路径（见 PathSuggestions）：输入框里的灰字只是示例，不是值 */
+  suggestions: PathSuggestions;
   detect: DetectPayload | null;
   detectError: string | null;
   preview: PreviewPayload | null;
@@ -133,6 +136,8 @@ export function useLauncher(): LauncherController {
   const [profilesDir, setProfilesDir] = useState("");
   const [settings, setSettings] = useState<AppSettingsPayload | null>(null);
   const [precheck, setPrecheck] = useState<PrecheckReport | null>(null);
+  /** 主进程探测到的、可一键填入的路径（空串表示没探到） */
+  const [suggestions, setSuggestions] = useState<PathSuggestions>({ modelsDir: "", presetPath: "" });
 
   /**
    * 用一次初始化载荷整体替换本地状态（启动、打开配置后都走它）。
@@ -149,6 +154,7 @@ export function useLauncher(): LauncherController {
     setWarnings(payload.warnings);
     // 中性通知（如"首次运行已生成配置"）：老载荷里可能没有这个字段，兜一下底
     setNotices(payload.notices ?? []);
+    setSuggestions(payload.suggestions ?? { modelsDir: "", presetPath: "" });
   }, []);
 
   /**
@@ -521,6 +527,7 @@ export function useLauncher(): LauncherController {
     schema,
     warnings,
     notices,
+    suggestions,
     detect,
     detectError,
     preview,

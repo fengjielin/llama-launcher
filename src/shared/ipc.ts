@@ -11,6 +11,8 @@
 import type { BuildStep, LauncherConfig } from "../core/types.ts";
 import type { ParamGroup, ValueKind } from "../core/types.ts";
 import type { LogEventKind, LogMetrics } from "../core/logLines.ts";
+import type { MetricsSample, MetricsSeries } from "../core/metrics.ts";
+import type { ProfileInfo } from "../core/profiles.ts";
 
 export const IPC = {
   /** 启动时拉取：配置路径、归一化配置、参数表 */
@@ -37,9 +39,23 @@ export const IPC = {
   revealPath: "shell:revealPath",
   /** 界面刚加载时拉取主进程缓存的历史日志 */
   logsRecent: "logs:recent",
+  /** 拉取一次指标快照（含历史序列） */
+  metricsSnapshot: "metrics:snapshot",
+  /** 打开/关闭实时指标推送（界面切到「监控」页时才开，避免白烧 nvidia-smi） */
+  metricsWatch: "metrics:watch",
+  /** 档案：列出 / 保存 / 载入 / 删除 / 在资源管理器里定位 */
+  profilesList: "profiles:list",
+  profilesSave: "profiles:save",
+  profilesLoad: "profiles:load",
+  profilesDelete: "profiles:delete",
+  profilesReveal: "profiles:reveal",
+  /** 应用设置：开机自启、关闭窗口是否缩到托盘 */
+  settingsGet: "settings:get",
+  settingsSet: "settings:set",
   /** 主进程 → 渲染层的推送 */
   pushLog: "push:log",
   pushState: "push:state",
+  pushMetrics: "push:metrics",
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];
@@ -215,6 +231,57 @@ export interface ConfigFileResult {
   warnings: string[];
 }
 
+/**
+ * 指标快照：一次性给全界面画图所需的数据。
+ *
+ * `series` 是 `latest` 所在整段历史的"按指标分列"形式，渲染层直接按下标画折线，
+ * 不需要自己遍历样本。
+ */
+export interface MetricsPayload {
+  /** 最近一次采样；从未采过时为 `null` */
+  latest: MetricsSample | null;
+  /** 历史序列（各列等长，与 `series.at` 对齐） */
+  series: MetricsSeries;
+  /** 采样器是否正在跑 */
+  running: boolean;
+  /** GPU 采集失败的原因（没装 nvidia-smi / 非 NVIDIA 机器）；正常时为 `null` */
+  gpuError: string | null;
+}
+
+/** 档案列表 */
+export interface ProfilesPayload {
+  /** 档案目录（界面展示用，也方便用户直接去那儿拷文件） */
+  dir: string;
+  /** 按最后修改时间从新到旧 */
+  profiles: ProfileInfo[];
+}
+
+/** 载入档案的结果：成功时 `payload` 是完整的初始化载荷（与换配置同构） */
+export interface ProfileLoadResult extends ConfigFileResult {
+  /** 被载入的档案名 */
+  name: string | null;
+}
+
+/**
+ * 应用级设置（启动器自己的偏好，与"启动配置"无关）。
+ *
+ * 只有这两项是**持久化**的；`autostartSupported` 是运行时探测结果，不进磁盘。
+ */
+export interface AppSettings {
+  /** 开机自启（写进系统登录项） */
+  openAtLogin: boolean;
+  /** 关闭窗口时缩到托盘而不是退出（服务会继续跑） */
+  minimizeToTray: boolean;
+}
+
+/** 设置载荷：持久化字段 + 运行时信息 */
+export interface AppSettingsPayload extends AppSettings {
+  /** 当前平台是否支持开机自启（Linux 上需要桌面项，未实现） */
+  autostartSupported: boolean;
+  /** 设置文件的落盘位置（界面展示用，方便用户直接查） */
+  settingsPath: string;
+}
+
 export function isErrorPayload(value: unknown): value is ErrorPayload {
   return typeof value === "object" && value !== null && "error" in value;
 }
@@ -239,4 +306,23 @@ export interface LlamaApi {
   recentLogs(): Promise<LogPush[]>;
   onLog(handler: (entry: LogPush) => void): () => void;
   onState(handler: (state: StatePush) => void): () => void;
+
+  // ---- 指标监控（M3）----
+  /** 拉一次指标快照（含历史序列），用于首次绘制 */
+  metricsSnapshot(): Promise<MetricsPayload>;
+  /** 开关实时推送：界面切到「监控」页时传 true，离开时传 false */
+  metricsWatch(active: boolean): Promise<{ ok: boolean; running: boolean }>;
+  /** 订阅每次采样（仅在 watch 为 true 期间会收到）；载荷含历史序列，直接替换本地状态即可 */
+  onMetrics(handler: (payload: MetricsPayload) => void): () => void;
+
+  // ---- 配置档案（M3）----
+  listProfiles(): Promise<ProfilesPayload>;
+  saveProfile(name: string, config: LauncherConfig): Promise<{ ok: boolean; profiles: ProfileInfo[]; saved: string }>;
+  loadProfile(name: string): Promise<ProfileLoadResult>;
+  deleteProfile(name: string): Promise<{ ok: boolean; profiles: ProfileInfo[] }>;
+  revealProfiles(): Promise<{ ok: boolean; dir: string }>;
+
+  // ---- 应用设置（M3）----
+  getSettings(): Promise<AppSettingsPayload>;
+  setSettings(patch: Partial<AppSettings>): Promise<AppSettingsPayload>;
 }

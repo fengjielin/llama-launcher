@@ -8,7 +8,14 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { LauncherConfig } from "../core/types.ts";
 import { IPC } from "../shared/ipc.ts";
-import type { LlamaApi, LogPush, PickPathRequest, StatePush } from "../shared/ipc.ts";
+import type {
+  AppSettings,
+  LlamaApi,
+  LogPush,
+  MetricsPayload,
+  PickPathRequest,
+  StatePush,
+} from "../shared/ipc.ts";
 
 const api: LlamaApi = {
   bootstrap: () => ipcRenderer.invoke(IPC.bootstrap),
@@ -26,6 +33,28 @@ const api: LlamaApi = {
   openWebUi: () => ipcRenderer.invoke(IPC.openWebUi),
   revealPath: (path: string) => ipcRenderer.invoke(IPC.revealPath, path),
   recentLogs: () => ipcRenderer.invoke(IPC.logsRecent),
+
+  // ---- 指标监控（M3）----
+  metricsSnapshot: () => ipcRenderer.invoke(IPC.metricsSnapshot),
+  metricsWatch: (active: boolean) => ipcRenderer.invoke(IPC.metricsWatch, active),
+  onMetrics(handler: (payload: MetricsPayload) => void) {
+    const listener = (_event: unknown, payload: MetricsPayload): void => handler(payload);
+    ipcRenderer.on(IPC.pushMetrics, listener);
+    return () => {
+      ipcRenderer.removeListener(IPC.pushMetrics, listener);
+    };
+  },
+
+  // ---- 配置档案（M3）----
+  listProfiles: () => ipcRenderer.invoke(IPC.profilesList),
+  saveProfile: (name: string, config: LauncherConfig) => ipcRenderer.invoke(IPC.profilesSave, name, config),
+  loadProfile: (name: string) => ipcRenderer.invoke(IPC.profilesLoad, name),
+  deleteProfile: (name: string) => ipcRenderer.invoke(IPC.profilesDelete, name),
+  revealProfiles: () => ipcRenderer.invoke(IPC.profilesReveal),
+
+  // ---- 应用设置（M3）----
+  getSettings: () => ipcRenderer.invoke(IPC.settingsGet),
+  setSettings: (patch: Partial<AppSettings>) => ipcRenderer.invoke(IPC.settingsSet, patch),
 
   onLog(handler: (entry: LogPush) => void) {
     const listener = (_event: unknown, entry: LogPush): void => handler(entry);

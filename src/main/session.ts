@@ -13,6 +13,15 @@ import { fetchHealth, findFreePort, probeTcp } from "../core/health.ts";
 import { createCapabilities } from "../core/helpProbe.ts";
 import { prepareLaunch, probeServer } from "../core/launcher.ts";
 import { LlamaServer } from "../core/llamaProcess.ts";
+import { MetricsSampler } from "../core/metrics.ts";
+import {
+  deleteProfile as deleteProfileFile,
+  listProfiles as listProfileFiles,
+  profilePath,
+  readProfile as readProfileFile,
+  saveProfile as saveProfileFile,
+} from "../core/profiles.ts";
+import type { ProfileInfo } from "../core/profiles.ts";
 import type { Capabilities, LauncherConfig } from "../core/types.ts";
 import type {
   BootstrapPayload,
@@ -20,7 +29,10 @@ import type {
   ErrorPayload,
   HealthPayload,
   LogPush,
+  MetricsPayload,
   PreviewPayload,
+  ProfileLoadResult,
+  ProfilesPayload,
   StartPayload,
   StatePush,
   StatusPayload,
@@ -43,6 +55,8 @@ export interface SessionEvents {
   onLog?: (entry: LogPush) => void;
   /** 进程状态变化回调（注意：这里不带 health，健康状态由界面轮询 `status()` 获取） */
   onState?: (push: StatePush) => void;
+  /** 每次指标采样后的完整载荷（含历史序列，界面直接替换状态即可） */
+  onMetrics?: (payload: MetricsPayload) => void;
 }
 
 /**
@@ -66,6 +80,8 @@ export class LauncherSession {
   private logBuffer: LogPush[] = [];
   private lastPreview: PreviewPayload | null = null;
   private server = new LlamaServer();
+  /** 指标采样器：懒创建（没人看监控页时不该起定时器），但对象本身很轻 */
+  private sampler: MetricsSampler | null = null;
   private events: SessionEvents;
 
   /**
@@ -348,8 +364,11 @@ export class LauncherSession {
           this.logBuffer.splice(0, this.logBuffer.length - LOG_BUFFER_LIMIT);
         }
         this.events.onLog?.(push);
+        // 日志里带 tok/s 时顺手喂给采样器，界面上的吞吐曲线就有数据了
+        this.metricsSampler().noteThroughput(event.metrics);
       },
       onState: (state, note) => {
+        this.metricsSampler().setServerState(state);
         this.events.onState?.({ state, note, health: null });
       },
     });
@@ -367,6 +386,18 @@ export class LauncherSession {
   async stop(): Promise<{ ok: boolean }> {
     await this.server.stop();
     return { ok: true };
+  }
+
+  /**
+   * 用**当前已加载的配置**启动。
+   *
+   * 给没有界面入参的调用方用（托盘菜单、未来的快捷键）：
+   * 它们手里没有 config 对象，而会话一直持有最新的一份。
+   *
+   * @returns 与 {@link start} 相同的载荷
+   */
+  async startCurrent(): Promise<StartPayload | ErrorPayload> {
+    return this.start(this.config);
   }
 
   // ------------------------------------------------------------------ 状态
@@ -434,5 +465,144 @@ export class LauncherSession {
    */
   recentLines(count = 50): string[] {
     return this.server.recentLines(count);
+  }
+
+  // ------------------------------------------------------------------ 指标监控（M3）
+
+  /**
+   * 取指标采样器（懒创建）。
+   *
+   * 主卡序号取自配置的 `main_gpu`（多卡时用户可能希望盯第二张卡）。
+   * 注意：创建对象不会起定时器，只有 {@link watchMetrics}(true) 才会开始采样。
+   * 每次采样后会推**完整载荷**（含历史序列），界面拿到直接替换即可，不必自己攒数据。
+   */
+  private metricsSampler(): MetricsSampler {
+    if (this.sampler === null) {
+      const sampler = new MetricsSampler({
+        mainGpuIndex: this.mainGpuIndex(),
+        onSample: () => this.events.onMetrics?.(this.metricsPayload(sampler)),
+      });
+      this.sampler = sampler;
+    }
+    return this.sampler;
+  }
+
+  /** 把采样器的当前状态打包成给界面的载荷 */
+  private metricsPayload(sampler: MetricsSampler): MetricsPayload {
+    return {
+      latest: sampler.latest(),
+      series: sampler.series(),
+      running: sampler.isRunning(),
+      gpuError: sampler.gpuError(),
+    };
+  }
+
+  /** 解析配置里的 `main_gpu`：可能是数字也可能是字符串，解析不出就当 0 号卡 */
+  private mainGpuIndex(): number {
+    const raw = this.config.main_gpu;
+    const parsed = typeof raw === "number" ? raw : Number.parseInt(String(raw ?? ""), 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+  }
+
+  /**
+   * 取一次指标快照（含历史序列），界面首次绘制监控页时用。
+   *
+   * @returns 最近采样、历史序列、采样器是否在跑、GPU 采集失败原因
+   */
+  async metricsSnapshot(): Promise<MetricsPayload> {
+    return this.metricsPayload(this.metricsSampler());
+  }
+
+  /**
+   * 开关实时指标采样。
+   *
+   * 界面切到「监控」页时开、离开时关 —— 每秒起一个 nvidia-smi 进程是实打实的开销，
+   * 没人看的时候不该烧。历史不会被清空，切回来还能看到之前的曲线。
+   *
+   * @param active 是否开始采样
+   * @returns `running` 为开关之后的实际状态
+   */
+  watchMetrics(active: boolean): { ok: boolean; running: boolean } {
+    const sampler = this.metricsSampler();
+    if (active) sampler.start();
+    else sampler.stop();
+    return { ok: true, running: sampler.isRunning() };
+  }
+
+  // ------------------------------------------------------------------ 配置档案（M3）
+
+  /** 档案目录：与当前配置文件同级的 `profiles/`，方便用户直接去那儿拷文件 */
+  profilesDir(): string {
+    return join(dirname(this.configPath), "profiles");
+  }
+
+  /**
+   * 列出全部档案（按最后修改时间从新到旧）。
+   *
+   * @returns 档案目录与档案数组；目录还不存在时数组为空
+   */
+  listProfiles(): ProfilesPayload {
+    const dir = this.profilesDir();
+    return { dir, profiles: listProfileFiles(dir) };
+  }
+
+  /**
+   * 把一份配置存成档案。
+   *
+   * 档案名会被规整成安全文件名（非法字符替换、目录穿越无效化），同名则覆盖。
+   *
+   * @param name 档案名（用户输入，不必是安全名）
+   * @param config 要保存的配置（通常是界面当前这份，可能还没存盘）
+   * @returns 保存后的档案列表与实际写入的档案名
+   */
+  saveProfile(name: string, config: LauncherConfig): { ok: boolean; profiles: ProfileInfo[]; saved: string } {
+    const saved = saveProfileFile(this.profilesDir(), name, config);
+    return { ok: true, profiles: this.listProfiles().profiles, saved: saved.name };
+  }
+
+  /**
+   * 载入一个档案：读文件 → 归一化 → **把它设为当前配置**。
+   *
+   * 之所以连 `configPath` 一起切过去：这样界面上的「保存」会写回这套档案，
+   * 符合"载入档案 = 开始用这套配置"的直觉。
+   *
+   * @param name 档案名
+   * @returns 新的初始化载荷（结构与换配置一致）；档案不存在或读不出来时 `payload` 为当前状态并附告警
+   */
+  loadProfile(name: string): ProfileLoadResult {
+    const path = profilePath(this.profilesDir(), name);
+    try {
+      const loaded = readProfileFile(path);
+      this.configPath = path;
+      this.config = loaded.config;
+      this.configWarnings = loaded.warnings;
+      this.invalidateCapabilities();
+      const payload = this.bootstrapPayload();
+      return { canceled: false, name, path, payload, warnings: loaded.warnings };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      const payload = this.bootstrapPayload();
+      return {
+        canceled: false,
+        name,
+        path: null,
+        payload,
+        warnings: [`载入档案「${name}」失败：${reason}`],
+      };
+    }
+  }
+
+  /**
+   * 删除一个档案（幂等：文件已不存在也算成功）。
+   *
+   * 边界：若删的正是当前正在用的那套档案，**不改动当前配置**（内存里的配置照常可用，
+   * 只是"保存"会重新把它写出来）—— 删文件顺手清空界面上的参数会让人措手不及。
+   *
+   * @param name 档案名
+   * @returns 删除后的档案列表
+   */
+  deleteProfile(name: string): { ok: boolean; profiles: ProfileInfo[] } {
+    deleteProfileFile(this.profilesDir(), name);
+    return { ok: true, profiles: this.listProfiles().profiles };
   }
 }

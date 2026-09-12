@@ -3,7 +3,7 @@
  * 业务逻辑全在 LauncherSession（不 import electron，可单测）。
  */
 
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
@@ -16,15 +16,39 @@ import type {
 } from "electron";
 import type { LauncherConfig } from "../core/types.ts";
 import { IPC } from "../shared/ipc.ts";
-import type { ConfigFileResult, PickKind, PickPathRequest, PickPathResult } from "../shared/ipc.ts";
+import type {
+  AppSettings,
+  AppSettingsPayload,
+  ConfigFileResult,
+  MetricsPayload,
+  PickKind,
+  PickPathRequest,
+  PickPathResult,
+  ProfileLoadResult,
+  ProfilesPayload,
+} from "../shared/ipc.ts";
 import { LauncherSession } from "./session.ts";
+import { DEFAULT_SETTINGS, loadSettings, saveSettings, settingsPathFor } from "./settings.ts";
+import { TrayController } from "./tray.ts";
+import type { TrayState } from "./tray.ts";
 
 const preloadPath = fileURLToPath(new URL("../preload/index.cjs", import.meta.url));
 const rendererHtml = fileURLToPath(new URL("../renderer/index.html", import.meta.url));
 
 let win: BrowserWindow | null = null;
 let session: LauncherSession | null = null;
+let tray: TrayController | null = null;
 let quitting = false;
+
+/** 应用级设置（开机自启 / 关闭窗口行为）。落盘路径在 app ready 之后才能拿到，故先留空 */
+let settings: AppSettings = { ...DEFAULT_SETTINGS };
+let settingsPath = "";
+
+/** 开机自启目前只实现了 Windows 与 macOS（Linux 需要装 .desktop 项，见 README 的 M3 说明） */
+const AUTOSTART_SUPPORTED = process.platform === "win32" || process.platform === "darwin";
+
+/** 由开机自启拉起时带 `--hidden`：只驻留托盘，不弹窗口 */
+const START_HIDDEN = process.argv.includes("--hidden");
 
 /**
  * 默认配置文件的路径。
@@ -55,10 +79,128 @@ function getSession(): LauncherSession {
   if (session === null) {
     session = new LauncherSession(defaultConfigPath(), {
       onLog: (entry) => win?.webContents.send(IPC.pushLog, entry),
-      onState: (push) => win?.webContents.send(IPC.pushState, push),
+      onState: (push) => {
+        win?.webContents.send(IPC.pushState, push);
+        // 托盘图标要跟着服务状态变色（灰=没跑 / 绿=在跑）
+        updateTray({ serverState: push.state, running: push.state === "running" });
+      },
+      onMetrics: (sample) => win?.webContents.send(IPC.pushMetrics, sample),
     });
   }
   return session;
+}
+
+// ---------------------------------------------------------------------------
+// 设置 / 托盘（M3）
+// ---------------------------------------------------------------------------
+
+/** 打包设置载荷：持久化字段 + 运行时信息（平台是否支持自启、文件位置） */
+function settingsPayload(): AppSettingsPayload {
+  return { ...settings, autostartSupported: AUTOSTART_SUPPORTED, settingsPath };
+}
+
+/**
+ * 把设置写进系统登录项。
+ *
+ * 带 `--hidden` 参数：开机自启时只驻留托盘不弹窗（否则每次开机都糊一脸窗口）。
+ * 不支持自启的平台直接跳过（Linux），改由界面上的说明告知。
+ */
+function applyAutostart(): void {
+  if (!AUTOSTART_SUPPORTED) return;
+  app.setLoginItemSettings({ openAtLogin: settings.openAtLogin, args: ["--hidden"] });
+}
+
+/**
+ * 更新设置：改内存 → 落盘 → 同步开机自启 → 刷新托盘勾选状态。
+ *
+ * 落盘失败只打日志不抛错：设置存不下来不该让界面操作失败，
+ * 但要在控制台留下痕迹（用户报"改了设置重启就没了"时有据可查）。
+ *
+ * @param patch 要修改的设置项
+ * @returns 更新后的完整设置载荷
+ */
+function applySettings(patch: Partial<AppSettings>): AppSettingsPayload {
+  settings = { ...settings, ...patch };
+  try {
+    saveSettings(settingsPath, settings);
+  } catch (err) {
+    console.error(`设置保存失败（${settingsPath}）：${err instanceof Error ? err.message : String(err)}`);
+  }
+  applyAutostart();
+  tray?.setSettings(settings);
+  return settingsPayload();
+}
+
+/**
+ * 同步托盘状态（窗口可见性 / 服务状态）。
+ *
+ * `windowVisible` 每次都重新读 —— 它会随用户点窗口而变化，调用方不必自己跟踪。
+ *
+ * @param next 要覆盖的服务状态字段
+ */
+function updateTray(next: Partial<Omit<TrayState, "windowVisible">> = {}): void {
+  if (tray === null) return;
+  tray.update({ ...next, windowVisible: win?.isVisible() ?? false });
+}
+
+/** 显示/隐藏主窗口（托盘单击与菜单都走它）；窗口已被销毁则重建 */
+function toggleWindow(): void {
+  if (win === null) {
+    void createWindow();
+    return;
+  }
+  if (win.isVisible()) {
+    win.hide();
+  } else {
+    win.show();
+    win.focus();
+  }
+  updateTray();
+}
+
+/** 托盘菜单「启动服务」：用会话里当前那份配置启动，并把结果同步到托盘 */
+async function startFromTray(): Promise<void> {
+  const result = await getSession().startCurrent();
+  if (!("error" in result)) updateTray({ running: result.report.ready, baseUrl: result.baseUrl });
+}
+
+/**
+ * 创建托盘图标（应用级单例；重复调用直接返回）。
+ *
+ * 整体包一层 try/catch：托盘创建失败（图标格式不对、系统托盘被策略禁用等）
+ * 不该让整个程序起不来 —— 界面与 CLI 仍然可用，只是少了常驻入口。
+ * 失败会打一条明确的错误日志，便于排查。
+ */
+function createTray(): void {
+  if (tray !== null) return;
+  try {
+    tray = new TrayController(
+      {
+        onToggleWindow: () => toggleWindow(),
+        onStart: () => void startFromTray(),
+        onStop: () => {
+          void getSession()
+            .stop()
+            .then(() => updateTray({ running: false }));
+        },
+        onOpenWebUi: () => {
+          void getSession()
+            .status()
+            .then((status) => shell.openExternal(status.baseUrl));
+        },
+        onChangeSettings: (patch) => {
+          applySettings(patch);
+        },
+        onQuit: () => app.quit(),
+      },
+      settings,
+      { serverState: "idle", running: false, baseUrl: "", windowVisible: win?.isVisible() ?? false },
+      AUTOSTART_SUPPORTED,
+    );
+  } catch (err) {
+    tray = null;
+    console.error(`创建托盘失败（界面仍可正常使用）：${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 /**
@@ -94,9 +236,21 @@ async function createWindow(): Promise<void> {
     },
   });
 
-  win.once("ready-to-show", () => win?.show());
+  // 由开机自启拉起（--hidden）时不弹窗，只驻留托盘；其余情况等渲染好再显示，避免白屏闪一下
+  if (!START_HIDDEN) win.once("ready-to-show", () => win?.show());
+  win.on("show", () => updateTray());
+  win.on("hide", () => updateTray());
   win.on("closed", () => {
     win = null;
+    updateTray();
+  });
+  win.on("close", (event) => {
+    // 关闭窗口 ≠ 退出：这是台"服务启动器"，服务该继续跑。
+    // 真正退出走托盘菜单的「退出」（会先停服再退）。
+    if (settings.minimizeToTray && !quitting) {
+      event.preventDefault();
+      win?.hide();
+    }
   });
 
   // ⚠ 监听必须挂在 load 之前：await loadFile() 是在 did-finish-load 之后才 resolve 的，
@@ -292,19 +446,59 @@ function registerIpc(): void {
     if (typeof path === "string" && path !== "") shell.showItemInFolder(path);
     return { ok: true };
   });
+
+  // ---- 指标监控（M3）----
+  ipcMain.handle(IPC.metricsSnapshot, (): Promise<MetricsPayload> => s().metricsSnapshot());
+  // active === true 才开采样：界面离开监控页会主动关掉，避免白烧 nvidia-smi
+  ipcMain.handle(IPC.metricsWatch, (_e, active: boolean) => s().watchMetrics(active === true));
+
+  // ---- 配置档案（M3）----
+  ipcMain.handle(IPC.profilesList, (): ProfilesPayload => s().listProfiles());
+  ipcMain.handle(IPC.profilesSave, (_e, name: string, config: LauncherConfig) => s().saveProfile(name, config));
+  ipcMain.handle(IPC.profilesLoad, (_e, name: string): ProfileLoadResult => s().loadProfile(name));
+  ipcMain.handle(IPC.profilesDelete, (_e, name: string) => s().deleteProfile(name));
+  ipcMain.handle(IPC.profilesReveal, () => {
+    const dir = s().profilesDir();
+    // 目录还不存在时先建出来，否则资源管理器打开会失败
+    mkdirSync(dir, { recursive: true });
+    void shell.openPath(dir);
+    return { ok: true, dir };
+  });
+
+  // ---- 应用设置（M3）----
+  ipcMain.handle(IPC.settingsGet, (): AppSettingsPayload => settingsPayload());
+  ipcMain.handle(IPC.settingsSet, (_e, patch: Partial<AppSettings>): AppSettingsPayload => applySettings(patch));
+}
+
+/**
+ * 窗口关闭时若设置了「缩到托盘」，应用会继续在后台跑（服务不断），
+ * 所以这里再给它一次机会拦一下退出请求 —— 与 `win.on("close")` 是两道保险。
+ */
+function shouldKeepRunningInTray(): boolean {
+  return settings.minimizeToTray && !quitting;
 }
 
 app.whenReady().then(async () => {
+  // 设置文件必须放在 userData 下：打包后安装目录是只读的
+  settingsPath = settingsPathFor(app.getPath("userData"));
+  settings = loadSettings(settingsPath);
+  // 与系统登录项对一次账（用户可能在系统设置里改过）
+  applyAutostart();
+
   registerIpc();
   await createWindow();
+  createTray();
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) void createWindow();
   });
 });
 
-// macOS 上关掉所有窗口不等于退出应用，点 Dock 图标要能重新开窗
+// 关掉所有窗口不等于退出：设置了「缩到托盘」时应用要继续在后台跑（服务不断）
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  if (process.platform === "darwin") return;
+  if (shouldKeepRunningInTray()) return;
+  app.quit();
 });
 
 /**
@@ -313,7 +507,11 @@ app.on("window-all-closed", () => {
  * 所以这里拦一次退出，等 stop() 完成（内含 taskkill /T /F 兜底）再真正退出。
  */
 app.on("before-quit", (event) => {
-  if (quitting || session === null) return;
+  if (quitting || session === null) {
+    tray?.destroy();
+    tray = null;
+    return;
+  }
   event.preventDefault();
   quitting = true;
   void session

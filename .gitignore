@@ -22,3 +22,6 @@ profiles/
 *.swp
 .DS_Store
 Thumbs.db
+
+# 改配置时的就地备份（见 README 的配置说明）
+*.bak-*

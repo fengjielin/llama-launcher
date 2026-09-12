@@ -1,0 +1,244 @@
+# llama-launcher —— llama.cpp 启动器
+
+桌面端 llama.cpp 启动器。分两层：
+
+- **core（`src/core`）**：零依赖、可 CLI 驱动。配置 → 运行时参数探测 → presets 解析 → 命令行拼装 →
+  进程生命周期 → 日志流 → 就绪判断 → 失败诊断。**不 import electron**，因此能被单测、被 CLI 直接驱动。
+- **GUI（`src/main` + `src/preload` + `src/renderer`）**：Electron + React + Tailwind。界面只通过 IPC 拿数据，
+  **从不自己拼命令行**，所以「界面上看到的命令」和「实际启动的命令」永远是同一条。
+
+## 当前进度
+
+| 阶段 | 内容 | 状态 |
+| --- | --- | --- |
+| **M1** | core：schema / 探测 / 拼装 / presets / 配置 / 进程 / 日志 / 健康检查 / CLI / 单测 | ✅ 65 项测试通过，已实跑 llama-server 验证 |
+| **M2** | Electron + React + Tailwind 界面：模型选择、schema 驱动表单、启停、日志、决策表 | ✅ 已完成，已实跑「界面点启动 → 日志回流」全流程验证 |
+| M3 | 资源监控（VRAM/温度/功耗/曲线）、托盘常驻、多套 profile、开机自启 | 待开始 |
+| M4 | 打包分发、驱动/后端预检、HF 下载、多实例 | 待开始 |
+
+## 界面长什么样
+
+```
+┌───────────────────────────────────────────────────────────────────────────┐
+│ llama.cpp 启动器  b10488  248 个参数   配置：…\llama-launcher.json  [按钮组] │
+├──────────────────┬────────────────────────────────────────────────────────┤
+│ [启动服务][打开网页]│ 实际启动命令  llama-server.exe --models-dir … -fa on …  │
+│ 运行模式 (router)  │ ⚠ presets.ini 路径含非 ASCII…（自动拷到临时目录）        │
+│ 模型（目录/预设/预加载/视觉/草稿）│ ┌ 参数 49 │ 决策表 52 │ 日志 24 ┐        │
+│ llama.cpp（构建目录）│ │ 分组折叠的参数表单 / 决策表 / 实时日志（按等级着色） │
+├──────────────────┴────────────────────────────────────────────────────────┤
+│ running │ 端口已监听（等待 504 ms） PID 22064 │ http://127.0.0.1:8080 │ 服务就绪 │
+└───────────────────────────────────────────────────────────────────────────┘
+```
+
+参数表单由 `schema.ts` **自动生成**，并按运行时 `--help` 探测结果显示三种徽标：
+「preset 接管」（命令行不会再传，避免盖掉 presets.ini）、「已废弃」（如 `--mlock`）、「本版本不支持」（置灰）。
+
+## 快速开始
+
+### 桌面界面
+
+```powershell
+pnpm dev                 # 开发模式（Vite HMR + Electron）
+pnpm build && pnpm start # 构建后运行（产物在 out/）
+pnpm typecheck           # tsc --noEmit
+```
+
+### 命令行（core 不依赖界面，随时可用）
+
+```powershell
+cd E:\Code\llama\llama-launcher
+
+# 1) 生成配置（自动探测 llama.cpp 目录、models 目录、presets.ini、预加载模型）
+node src/cli.ts init --config llama-launcher.json
+
+# 2) 只打印最终命令行 + 每个参数的决策原因（不启动任何进程，对拍用）
+node src/cli.ts args --config llama-launcher.json
+
+# 3) 现场探测 llama-server 的能力（版本、改名、不支持、已废弃）
+node src/cli.ts probe --llama-dir E:\Code\llama\llama.cpp
+
+# 4) 真正启动（流式打印日志、自动健康检查、失败给诊断、Ctrl+C 停止）
+node src/cli.ts run --config llama-launcher.json
+
+# 5) 把原版启动器（v1.9）的配置迁移过来
+node src/cli.ts migrate --from "E:\Code\llama\llamaServer启动器\llama_launcher_config.json"
+```
+
+其它：`pnpm test` 跑测试；`node src/cli.ts init --help`… 见 `node src/cli.ts help`。
+
+## 目录结构
+
+```
+llama-launcher/
+├─ src/core/
+│  ├─ types.ts         公共类型（全部是 Node 原生类型擦除可运行的写法）
+│  ├─ schema.ts        ★ 声明式参数表：候选参数名 / preset 键 / 分组 / 说明
+│  ├─ helpProbe.ts     ★ `--help` 解析 + 能力视图（参数改名的兜底机制）
+│  ├─ args.ts          ★ 命令行拼装（纯函数）+ 参数决策表
+│  ├─ presets.ts       presets.ini 解析（含非 ASCII 路径迁移）
+│  ├─ config.ts        配置归一化 / v1.9 迁移 / llama.cpp 目录探测
+│  ├─ launcher.ts      编排层：配置 → 探测 → presets → 命令行
+│  ├─ llamaProcess.ts  进程状态机 / 日志泵 / taskkill 兜底
+│  ├─ logLines.ts      行缓冲 / 日志分类 / 启动失败诊断
+│  └─ health.ts        TCP 探测 / /health 语义 / 端口顺延
+├─ src/cli.ts          命令行入口
+├─ src/test/           单测（进程内运行，见下文"测试"）
+└─ fixtures/           实测采集的真实数据（help / version / presets / 冒烟配置）
+```
+
+## 关键设计决策
+
+1. **参数表是唯一真源**（`schema.ts`）
+   GUI 表单、命令行拼装、preset 占位判断三者读同一张表。llama.cpp 参数改动频繁（本次实测就发现
+   `--draft-type-k` → `--spec-draft-type-k`、`--model-draft` → `--spec-draft-model`、`--mlock` 被
+   `--load-mode` 取代并标 DEPRECATED），把参数知识散进 UI 代码必然腐化。
+
+2. **运行时探测，不硬编码版本判断**（`helpProbe.ts`）
+   每个参数带一组候选名，`caps.pick()` 返回当前版本第一个支持的名字。所以启动器不需要"b10488 用什么、
+   b10679 用什么"的分支表。
+
+3. **参数决策表**（`args.ts` 的 `BuildStep[]`）
+   每个参数都记录「传了没有 / 为什么」，理由有七种：命令行直传、预加载直传、preset 接管、版本不支持、
+   兼容回退、按规则跳过、未配置。GUI 直接渲染这张表，用户就不会再问"我明明配了为什么没生效"。
+
+4. **preset 与命令行的优先级如实处理**
+   实测命令行优先级高于 presets.ini，所以 preset 里定义过的键命令行**不能再传**，否则会盖掉 preset。
+   例外：预加载的模型不吃 preset（实测 ctx 被忽略、fit 会把 ctx 压到 4096），此时必须反过来由命令行直传 ——
+   这条规则用 `preloadBypass` 标在具体参数上，与既有 PS1 脚本逐项对齐。
+
+5. **`--models-preset` 的路径必须是 ASCII**
+   中文路径会让 llama-server 刷两行日志后直接崩退。`stagePresetIfNonAscii()` 会先拷到临时目录再传，
+   并在决策表里说明。
+
+6. **行缓冲必须自己做**（`LineSplitter`）
+   `child_process` 的 stdout 按块给，块边界会把一行切成两半。不缓冲，日志面板里会随机出现半行。
+
+7. **`-fa` 的两种语法都支持**
+   新版是 `-fa on/off/auto`，旧版是纯开关，按 `--help` 的占位符形式自动选，不猜。
+
+8. **不静默降级**
+   没有 `--fit-target` 时回退 `-ngl 99`（全量 offload）并明确告警，绝不悄悄变成纯 CPU 推理。
+
+9. **日志分类优先用结构化等级**
+   b10488 的日志形如 `0.00.146.987 W srv  llama_server: ...`，等级字母比关键词可靠
+   （`CORS is set to allow all origins` 这种不含 warn 字样的告警只能靠它识别）。
+
+## 验收标准
+
+**同一份配置，`args` 输出的命令行必须与既有 `llama-oneclick.ps1` 生成的逐项一致。**
+`src/test/args.test.ts` 里的黄金用例就是这个基准。有意偏离的三处记在下面「已知偏离」。
+
+## 测试
+
+```powershell
+pnpm test          # 等价于 node src/test/run-tests.ts
+```
+
+61 项测试覆盖：`--help` 解析（真实 fixture）、能力回退、preset 并集/单模型/非 ASCII/BOM、命令行拼装黄金用例、
+预加载覆盖规则、旧版本各回退分支、参数改名、配置迁移、上下文单位识别、行缓冲跨块、日志分类、失败诊断、
+`/health` 的 200/503 语义、端口顺延。
+
+> 为什么不用 `node --test`：那个运行器会为每个测试文件 spawn 子进程并把 stdio 接管道，在受限沙箱里直接
+> `EPERM`。`run-tests.ts` 改成在同一进程里 import 全部测试文件，`node:test` 照样自动执行并设置退出码 ——
+> 不需要任何测试框架，也不需要额外依赖。
+
+**core 零依赖**：只用 Node 内置模块 + Node 22.18+ 的原生 TypeScript 类型擦除，没有构建步骤。
+（想要类型检查再装 `typescript` + `@types/node`，然后 `pnpm typecheck`。）
+
+## 实测记录
+
+对 `E:\Code\llama\llama.cpp`（b10488，CUDA 12.4）实跑结果：
+
+```
+[状态] starting - 正在启动 llama-server.exe
+0.00.145.948 I srv   load_models: Loaded 0 cached model presets
+0.00.146.488 I srv   load_models: Loaded 5 local model presets from E:/Code/llama/models
+0.00.146.767 I srv    operator(): Available models (5) (*: custom preset)
+0.00.149.953 I srv  llama_server: listening on http://127.0.0.1:8099
+[状态] running - 端口已监听（等待 501 ms）
+服务已就绪：http://127.0.0.1:8099
+[状态] stopping / exited - 已停止
+```
+
+顺带纠正两处旧认知（都是实测得出的）：
+
+1. **router 模式且未加载模型时，`/health` 实测返回 200**（不是 503）。`fetchHealth()` 两种都处理：
+   200 = ready，503 = loading（服务在、模型未加载），连接被拒 = 还没监听。
+2. **`presets.ini` 的 `[defaults]` 段不会被 llama-server 忽略**，它会被当成一个名叫 `defaults` 的模型：
+
+   ```
+   修复前： Loaded 6 custom model presets / Available models (6)   ← 多出一行 "* defaults"
+   修复后： Loaded 5 custom model presets / Available models (5)   ← [defaults] 已被剔除
+   ```
+
+   后果是网页下拉框里多一个假模型、并白占一个 `--models-max` 槽位。现在启动器读配置仍从原文件读
+   （`[defaults]` 是启动器自己的约定），但传给 llama-server 的那份会把这些段剔掉，并在提醒里说明。
+
+## Windows 编码踩坑（自己排查时别被骗）
+
+- 本机 PowerShell 是 **Windows PowerShell 5.1**：`Get-Content` 默认按 **GBK/ANSI** 解码，
+  于是 `llama-launcher.json` 里的中文路径会**显示**成乱码（`涓€閿惎鍔ㄨ剼鏈?`），但文件本身是好的 ——
+  用 `node -e "console.log(require('fs').existsSync(...))"` 这类纯 ASCII 输出来判断，别信控制台。
+- 同一份 PS 5.1 的 `Set-Content -Encoding UTF8` 会**写入 BOM**。这正是本项目第一版 help fixture 带 BOM
+  的原因（已修掉），也提醒你：**presets.ini 一旦被这样写过就会带 BOM，llama-server 会直接解析失败**。
+  启动器写文件一律用 Node 的 `utf8`（无 BOM），并有单测守着这一点。
+- 想验证时别用 `... | Select-Object -First N`：它会提前掐断上游管道，让 node 进程被中止，看起来像"启动失败"。
+  用 `Where-Object { $_ -match '...' }` 过滤。
+
+## 界面层的两个“必须这么写”的坑（实测踩过）
+
+1. **`electron` 必须显式列进 rollup 的 `external`。**
+   `electron-vite` 的 `externalizeDepsPlugin()` 只外部化 `package.json` 的 `dependencies`，而 `electron`
+   装在 `devDependencies` 里 —— 不外部化的话 rollup 会把 electron 这个 **npm 包**整个打进主进程 bundle，
+   而那个包的 `index.js` 在加载时会去解析自己的二进制路径、找不到就现场下载，结果应用一启动就报
+   `Electron failed to install correctly`（调用栈里能看到 `default_app.asar`）。
+2. **`did-finish-load` 监听必须在 `loadFile()/loadURL()` 之前挂。**
+   `await loadFile()` 是在该事件之后才 resolve 的，挂晚了就永远等不到，进程也不会退出。
+
+### 无人值守的界面自检
+
+不想靠人盯着屏幕看，可以设两个环境变量让界面自己导出结果：
+
+```powershell
+$env:LLAMA_LAUNCHER_UI_DUMP='E:\Code\llama\llama-launcher\out\ui'   # 写出 ui.txt（界面真实文本）+ ui.png（capturePage 截图）
+$env:LLAMA_LAUNCHER_UI_EXEC='...一段 JS...'                          # 可选：先执行一段 JS（例如点一下「启动服务」）
+$env:LLAMA_LAUNCHER_UI_EXEC_WAIT='15000'                             # 执行后等多久再截图
+pnpm build; node_modules\.bin\electron .
+```
+
+这条路径被用来验证「点启动 → IPC → 拼命令行 → spawn → 日志推回界面 → 状态栏变化」整条链路，
+导出的 `ui.txt` 里能直接读到 StatusBar 的 `running / PID / 服务就绪` 和日志面板的全部行。
+
+## 与既有资产的关系
+
+| 资产 | 本项目如何使用 |
+| --- | --- |
+| `一键启动脚本\llama-oneclick.ps1` | 作为**行为基准与参数知识来源**：显存档位、`--help` 探测、preset 占位规则、各版本回退、踩坑注释全部继承 |
+| `一键启动脚本\presets.ini` | 直接读取（fixtures 里有一份副本用于测试）；`[defaults]` 的 `; default-model =` 约定继续生效 |
+| `llamaServer启动器\反编译输出\` | 仅作**功能需求参考**（v1.9 的配置字段、UI 分区、GPU 监控方式）。版权归原作者（bilibili:hsxbxq），**不复制其代码、样式与文案、不二次分发** |
+| `llamaServer启动器\llama_launcher_config.json` | 用 `migrate` 子命令迁移字段并保留未知键 |
+
+## 已知偏离与待确认
+
+1. **思考开关**：新版本优先用 `--reasoning on/off/auto`（比 PS1 的 `--reasoning-budget 0` + 环境变量更直接），
+   旧版本才回退到 PS1 那套双管齐下。
+2. **`context: 64` 的单位**：v1.9 配置里写 64，按「K」解释成 65536 tokens（16G 档在 PS1 里是 32768，
+   64 不可能是 token 数）。迁移时会**明确告警**，不静默改数。若你原本就想要 64 tokens，改成 `65536` 之外的值并加 `"contextUnit": "tokens"`。
+3. **`presets.ini` 里那行 `; default-model = Qwen3.8-27B-Uncensored-IQ4_XS` 是注释，但 PS1 的读取逻辑仍然认它** ——
+   也就是说你现在的脚本**每次启动都会预加载 27B 模型**。`init` 会把这个行为如实写进配置的 `preload_model`。
+   不想要预加载就把 `preload_model` 置空（GUI 里会是个开关）。
+4. **驱动与 dflash**：本机驱动 566.36，而 dflash/dspark/MTP 需要的开发版是 CUDA 13.3 构建
+   （CUDA 13.x 需要 R580 以上驱动），现在跑不起来。M4 的「驱动/后端预检」会把这类问题在点启动前就报出来。
+5. `--no-kv-offload` 这类旧参数不再单独建模，走「自定义参数」栏透传。
+6. **`flash_attention` / `jinja` 的“关”要显式传值。** 这两个在 llama.cpp 里默认是**开启**的，
+   做成界面开关后如果“关掉就什么都不传”，实际仍然开着 —— 所以现在会显式传 `-fa off` /
+   `--no-jinja`；本版本没有对应形式时会在决策表里标「版本不支持」并告警，而不是假装关掉了。
+7. **`-1` / `0` 一律视为“自动”不传**（`threads`、`parallel`），交给 llama.cpp 用物理核数自己定，
+   比人肉猜准。
+
+## 下一步（M3）
+
+资源监控面板（VRAM / GPU 利用率 / 温度 / 功耗 / 频率，1s 一次轮询 nvidia-smi 并画曲线）、
+托盘常驻与开机自启、多套 profile 一键切换、把 `presets.ini` 在界面里可视化编辑（模型段增删改）。
+数据源与纯逻辑会继续留在 core 侧（可单测），界面只做展示。

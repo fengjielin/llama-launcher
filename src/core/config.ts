@@ -32,7 +32,9 @@ export const DEFAULT_CONFIG: LauncherConfig = {
   host: "127.0.0.1",
   port: 8080,
   context: 32768,
-  max_predict: 8192,
+  // 取上面那个窗口的一半（规则见 presets.ts 的 recommendedMaxPredict）：
+  // 太小会让 32K 窗口的模型只能输出 8K；太大（等于窗口）会让一次跑飞的回复占满窗口
+  max_predict: 16384,
   // PS1 的默认值：16G 卡留给系统/桌面的显存余量
   fit_target: 1024,
   load_mode: "mmap+mlock",

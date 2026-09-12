@@ -183,10 +183,30 @@ export function presetFileFromJson(presets: PresetJson, defaultModel: string | n
 }
 
 /**
+ * 单次生成上限的推荐值：取上下文窗口的一半。
+ *
+ * 为什么要有这条规则：`n-predict` 不写时，服务器会用命令行/配置级的默认值
+ * （程序默认 8192），于是"32K 窗口的模型只能输出 8K"看起来像没配好；
+ * 而写太大（等于窗口）又会让一次跑飞的回复把窗口占满（7–10 tok/s 下能占十几分钟）。
+ * 取一半是"够写长文件、又留足上下文余量"的折中。
+ *
+ * @param ctxSize 该模型的 `ctx-size`
+ * @returns 推荐的单次生成上限；`ctx-size` 太小（< 2048）时返回 `null`（不瞎猜）
+ */
+export function recommendedMaxPredict(ctxSize: number): number | null {
+  if (!Number.isFinite(ctxSize) || ctxSize < 2048) return null;
+  return Math.max(1024, Math.floor(ctxSize / 2));
+}
+
+/**
  * 把解析好的 ini 转成 JSON 预设（一次性导入用）。
  *
  * `[defaults]` 段不进结果：它里面只有启动器自用的 `default-model` 约定，
  * 对应配置里的 `preload_model`，不该出现在模型参数表里。
+ *
+ * **没写 `n-predict` 的模型会按 `ctx-size` 补一个推荐值**（见 {@link recommendedMaxPredict}）——
+ * 这样"首次运行/重建后自动生成的配置"也带着按模型的输出上限，而不是退回配置级默认值
+ * （踩过：调好的每模型上限在重建+首启后消失，命令回到 `-c 16384 -n 8192`）。
  *
  * @param file {@link parsePresetsIni} 的结果
  * @returns 模型名 → 参数表；键名用 ini 里的原始大小写
@@ -202,6 +222,12 @@ export function presetsJsonFromPresetFile(file: PresetFile): PresetJson {
       const rawKey = raws.find((k) => k.toLowerCase() === lowerKey) ?? lowerKey;
       // 纯十进制整数在 JSON 里写成数字更好读；其余（q4_0 / mmap+mlock 等）保持字符串
       table[rawKey] = /^-?\d+$/.test(value) ? Number(value) : value;
+    }
+    const hasMaxPredict = Object.keys(table).some((k) => k.toLowerCase() === "n-predict");
+    const ctx = Number(table["ctx-size"]);
+    if (!hasMaxPredict && Number.isFinite(ctx)) {
+      const recommended = recommendedMaxPredict(ctx);
+      if (recommended !== null) table["n-predict"] = recommended;
     }
     out[model] = table;
   }

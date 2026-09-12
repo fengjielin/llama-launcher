@@ -11,6 +11,7 @@ import {
   presetFileFromJson,
   presetKeysForModel,
   presetsJsonFromPresetFile,
+  recommendedMaxPredict,
   renderPresetFile,
   stagePresetText,
 } from "../core/presets.ts";
@@ -80,10 +81,17 @@ test("导入后再渲染：键值一条不差（ini → JSON → ini 往返）",
   for (const model of REAL_MODELS) {
     const before = parsePresetsIni(ini).sections.get(model)!;
     const after = back.sections.get(model)!;
-    assert.deepEqual([...after.entries()].sort(), [...before.entries()].sort(), `${model} 的键值应完全一致`);
+    // 原有键值必须一条不差地活下来
+    for (const [key, value] of before) {
+      assert.equal(after.get(key), value, `${model} 的 ${key} 应原样保留`);
+    }
+    // 唯一允许的新增：按 ctx-size 派生出来的 n-predict（见 recommendedMaxPredict）
+    const added = [...after.keys()].filter((k) => !before.has(k));
+    assert.deepEqual(added, ["n-predict"], `${model} 只应新增派生的 n-predict，实际新增 ${added.join(",")}`);
   }
   assert.equal(back.sections.has("defaults"), false, "渲染出来的 ini 不该有 [defaults]");
   assert.equal(getNumericPresetValue(back, "Qwen3.8-27B-Uncensored-IQ4_XS", "ctx-size"), 16384);
+  assert.equal(getNumericPresetValue(back, "Qwen3.8-27B-Uncensored-IQ4_XS", "n-predict"), 8192, "派生值也要渲染进 ini");
 });
 
 // ---------------------------------------------------------------------------
@@ -145,6 +153,31 @@ test("导入合并：同名模型保留现有配置，只补新的", () => {
   assert.deepEqual(added, ["模型B"]);
   assert.deepEqual(skipped, ["模型A"]);
   assert.deepEqual(existing, { 模型A: { "ctx-size": 4096 } }, "不该改动入参");
+});
+
+test("导入：ini 里没写 n-predict 的模型会按 ctx-size 的一半补一个推荐值", () => {
+  const json = presetsJsonFromPresetFile(parsePresetsIni(ini));
+  // 27B 两个模型的 ctx-size 在 ini 里分别是 16384 / 16384 → 上限 8192
+  assert.equal(json["Qwen3.8-27B-Uncensored-IQ4_XS"]?.["n-predict"], 8192);
+  assert.equal(json["Qwen3.8-27B-Uncensored-IQ2_M"]?.["n-predict"], 8192);
+  // 7B/8B 是 32768 → 16384
+  assert.equal(json["qwen2.5-7b-instruct-q4_k_m"]?.["n-predict"], 16384);
+  assert.equal(json["meta-llama.Meta-Llama-3-8B-Instruct.Q4_K_M"]?.["n-predict"], 16384);
+  // 4096 这种小窗口不瞎猜，按一半给 2048
+  assert.equal(recommendedMaxPredict(4096), 2048);
+  assert.equal(recommendedMaxPredict(1024), null, "窗口太小就不补，免得写出无意义的值");
+  assert.equal(recommendedMaxPredict(Number.NaN), null);
+});
+
+test("导入：ini 里已经写了 n-predict 就不覆盖", () => {
+  const text = "[m1]\nctx-size = 32768\nn-predict = 4096\n";
+  const json = presetsJsonFromPresetFile(parsePresetsIni(text));
+  assert.equal(json["m1"]?.["n-predict"], 4096, "用户明确写的值优先");
+});
+
+test("导入：没有 ctx-size 的模型不补 n-predict（无从推算）", () => {
+  const json = presetsJsonFromPresetFile(parsePresetsIni("[m1]\nthreads = 6\n"));
+  assert.equal(json["m1"]?.["n-predict"], undefined);
 });
 
 test("stagePresetText 写出的文件不带 BOM", () => {

@@ -51,6 +51,10 @@
  *
  * 环境变量：
  *   `LLAMA_PACKAGE_OUT`  指定输出目录（默认项目内的 `dist/`），便于把产物放到工作区之外。
+ *   `LLAMA_PACKAGE_TOUCH=1`  打包后把产物里所有文件/目录的时间戳统一成构建时间 ——
+ *     Electron 自带的文件（dll / pak / locales / electron.exe）时间戳是 1980-01-01
+ *     （官方 zip 的 MS-DOS 时间字段写的是最小值，可复现构建的常规做法），看目录时会显得很怪。
+ *     它不影响运行，所以默认不动；想统一就打开这个开关。
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -136,6 +140,70 @@ function restoreRuntimeFiles(appOutDir, kept) {
     }
   }
   return restored;
+}
+
+/**
+ * 读取一个"开关型"环境变量。
+ *
+ * @param {string} name 变量名
+ * @returns {boolean} 值为 1 / true / yes / on（忽略大小写与首尾空格）时为 `true`
+ */
+function envFlag(name) {
+  const raw = process.env[name];
+  if (raw === undefined) return false;
+  return ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
+}
+
+/**
+ * 递归把一棵目录树里所有文件与目录的时间戳统一成同一个时刻。
+ *
+ * 为什么需要它：产物里 Electron 自带的那些文件（`electron.exe`、`*.dll`、`*.pak`、`locales/`）
+ * 时间戳是 **1980-01-01**，看着很怪。原因在源头：Electron 官方 zip 的中央目录把全部 75 个条目
+ * 的时间字段都写成 MS-DOS 时间的最小值（`dosDate=0x0021 dosTime=0x0000` = 1980-01-01 00:00:00，
+ * 按 UTC 解释、在 UTC+8 显示成 08:00）—— 这是可复现构建的常规做法，让同一版本的 zip 字节恒定。
+ * 解压、硬链接镜像、electron-builder 复制都会**保留 mtime**，于是 1980 一路传到产物里。
+ *
+ * 这既不影响运行，也不影响 Electron 的任何校验；只有"目录里新旧混杂看着乱"和
+ * "按 mtime 做增量的同步/备份工具把它当极旧文件"这两点小麻烦，所以做成**默认关闭**的开关
+ * （`LLAMA_PACKAGE_TOUCH=1`）。
+ *
+ * @param {string} dir 目标目录
+ * @param {Date} when 要统一成的时刻
+ * @returns {{files: number, dirs: number, failed: number}} 统计（`failed` 通常是正被占用的文件）
+ */
+function touchTree(dir, when) {
+  const stats = { files: 0, dirs: 0, failed: 0 };
+  const walk = (current) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      stats.failed += 1;
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        // 先动文件再动目录：这样目录的 mtime 是"最后一次内容变更"的语义，不会被自己前面的写入破坏
+        try {
+          fs.utimesSync(full, when, when);
+          stats.dirs += 1;
+        } catch {
+          stats.failed += 1;
+        }
+        continue;
+      }
+      try {
+        fs.utimesSync(full, when, when);
+        stats.files += 1;
+      } catch {
+        stats.failed += 1;
+      }
+    }
+  };
+  walk(dir);
+  return stats;
 }
 
 /**
@@ -418,6 +486,26 @@ function main() {
   const exe = path.join(picked.dir, APP_OUT_NAME, "llama-launcher.exe");
   const restored = restoreRuntimeFiles(path.join(picked.dir, APP_OUT_NAME), keptRuntime);
   if (restored.length > 0) say(`  · 已放回：${restored.join("、")}（应用下次启动直接用它，不会重新探测）`);
+
+  if (envFlag("LLAMA_PACKAGE_TOUCH")) {
+    const when = new Date();
+    const touched = touchTree(path.join(picked.dir, APP_OUT_NAME), when);
+    // 顺带把安装包/便携版也刷一遍，免得同一个目录里新旧时间混杂
+    for (const name of fs.existsSync(picked.dir) ? fs.readdirSync(picked.dir) : []) {
+      if (!name.startsWith(ARTIFACT_PREFIX) || !name.endsWith(".exe")) continue;
+      try {
+        fs.utimesSync(path.join(picked.dir, name), when, when);
+        touched.files += 1;
+      } catch {
+        touched.failed += 1;
+      }
+    }
+    say(
+      `  · 已统一时间戳为 ${when.toLocaleString()}：文件 ${touched.files} 个、目录 ${touched.dirs} 个`
+        + (touched.failed > 0 ? `（${touched.failed} 个失败，通常是正被占用）` : ""),
+    );
+  }
+
   if (fs.existsSync(exe)) {
     const mb = (fs.statSync(exe).size / 1024 / 1024).toFixed(1);
     say(`\n✔ 打包完成：${exe}（${mb} MB）`);

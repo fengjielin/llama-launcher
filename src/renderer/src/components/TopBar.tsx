@@ -41,13 +41,6 @@ export function TopBar({ launcher }: { launcher: LauncherController }) {
         <Button onClick={() => void launcher.saveAs()} disabled={busy !== null || config === null}>
           另存为
         </Button>
-        <Button
-          onClick={() => void launcher.migrate()}
-          disabled={busy !== null}
-          title="导入原版启动器 v1.9 的 llama_launcher_config.json（保留未知键）"
-        >
-          导入 v1.9
-        </Button>
         <Button variant="primary" onClick={() => void launcher.refreshSchema()} disabled={busy !== null} title="重新跑 llama-server --version/--help">
           重新探测
         </Button>

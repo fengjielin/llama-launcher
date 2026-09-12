@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { DEFAULT_CONFIG, loadConfigFile, normalizeConfig, normalizeThink, saveConfigFile } from "../core/config.ts";
 
-/** llamaServer启动器 v1.9 写出来的配置（原样抄自用户目录里的那份） */
-const v19Config = {
+/** 一份"手写风格"的配置：含 K 写法的 context、额外未知键、显式采样值 */
+const handwrittenConfig = {
   llama_dir: "E:/Code/llama/llama.cpp",
   main_model: "E:/Code/llama/models/Qwen3.8-27B-Uncensored-IQ4_XS.gguf",
   vision_model: "",
@@ -35,44 +35,39 @@ const v19Config = {
   mlock: true,
   agent: false,
   reasoning_preserve: false,
-  mcp_proxy: true,
-  推测技术: true,
   reasoning_effort: "low",
   spec_type: "draft-mtp",
   draft_n: 2,
-  cpu_threads: -1,
   draft_type_k: "q4_0",
   draft_type_v: "q4_0",
   api_key: "",
   log_file: "qwen3.8-27b-log.json",
   custom_args: "",
+  /** 启动器不认识的键：应原样保留 */
+  某个没建模的键: "值",
 };
 
-test("v1.9 配置迁移：键名映射、未知键保留、上下文单位识别", () => {
-  const { config, warnings } = normalizeConfig(v19Config);
+test("归一化：未知键原样保留、context 单位识别、采样显式值不被联动覆盖", () => {
+  const { config, warnings } = normalizeConfig(handwrittenConfig);
 
   assert.equal(config.mode, "single");
   assert.equal(config.think, "off", "think:false 应归一成 off");
-  assert.equal(config.threads, -1, "cpu_threads → threads，且不能被后面的默认值冲掉");
-  assert.equal(config.spec_enabled, true, "推测技术 → spec_enabled");
   assert.equal(config.port, 8001);
   assert.equal(config.host, "0.0.0.0");
   assert.equal(config.parallel, -1);
-  assert.equal(config.mcp_proxy, true, "未知键原样保留");
+  assert.equal(config["某个没建模的键"], "值", "未知键要保留，不丢数据");
   assert.equal(config.log_file, "qwen3.8-27b-log.json");
 
-  // context=64 不可能是 token 数（16G 档位在 PS1 里是 32768），按 K 解释
+  // context=64 不可能是 token 数（16K 档位在 PS1 里是 32768），按 K 解释
   assert.equal(config.context, 65536);
-  assert.equal(config.max_predict, 8192, "v1.9 没有这个键，用默认值");
+  assert.equal(config.max_predict, DEFAULT_CONFIG.max_predict, "没写过就用默认值");
 
   // 用户显式写过的采样值不能被"思考模式联动"覆盖
   assert.equal(config.temperature, 0.6);
   assert.equal(config.top_p, 0.95);
   assert.equal(config.presence_penalty, 0);
 
-  assert.ok(warnings.some((w) => w.includes("v1.9")), warnings.join(" | "));
-  assert.ok(warnings.some((w) => w.includes("context=64")));
-  assert.ok(warnings.some((w) => w.includes("MCP")));
+  assert.ok(warnings.some((w) => w.includes("context=64")), warnings.join(" | "));
   assert.ok(warnings.some((w) => w.includes("draft-mtp")), "spec_type 需要草稿模型但没有 → 要告警");
 });
 

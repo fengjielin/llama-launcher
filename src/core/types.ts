@@ -84,7 +84,7 @@ export interface ParamSpec {
   /**
    * CLI 参数名候选，按优先级排列。
    * 同一个语义在不同 llama.cpp 版本里改过名的，全部列在这里 —— 例如草稿模型 KV 量化：
-   * v1.9 时代叫 `--draft-type-k`，b10488 已改成 `--spec-draft-type-k`。
+   * 早期构建里叫 `--draft-type-k`，b10488 已改成 `--spec-draft-type-k`。
    */
   candidates: string[];
   /** presets.ini 里对应的键名（用于判断该参数是否已被 preset 接管） */
@@ -110,7 +110,7 @@ export type ThinkingMode = "off" | "on" | "auto";
  *
  * 约定：值为 `undefined` / `null` / 空串的字段一律**不**传给 llama-server
  * （让 llama.cpp 用它自己的默认值），而不是传一个"看起来安全"的值。
- * 末尾的索引签名用于在迁移 v1.9 老配置时保留不认识的键，避免丢数据。
+ * 末尾的索引签名用于保留配置里不认识的额外键，避免丢数据。
  */
 export interface LauncherConfig {
   // ---- 运行环境 ----
@@ -213,7 +213,7 @@ export interface LauncherConfig {
   /** 附加环境变量（命令行盖不住的环境变量走这里） */
   extra_env?: Record<string, string>;
 
-  /** v1.9 迁移时保留的未知键 */
+  /** 配置里不认识的额外键：原样保留、不参与拼装 */
   [key: string]: unknown;
 }
 

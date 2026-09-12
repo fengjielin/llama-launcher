@@ -68,7 +68,6 @@ export interface LauncherController {
   openConfig: () => Promise<void>;
   save: () => Promise<void>;
   saveAs: () => Promise<void>;
-  migrate: () => Promise<void>;
   openWebUi: () => Promise<void>;
   pick: (key: string, kind: PickKind, title?: string) => Promise<void>;
   clearLogs: () => void;
@@ -136,7 +135,7 @@ export function useLauncher(): LauncherController {
   const [precheck, setPrecheck] = useState<PrecheckReport | null>(null);
 
   /**
-   * 用一次初始化载荷整体替换本地状态（启动、打开配置、导入 v1.9 后都走它）。
+   * 用一次初始化载荷整体替换本地状态（启动、打开配置后都走它）。
    *
    * 之所以整体替换而不是逐个 setState：这些载荷代表"换了一份配置"，
    * 逐字段更新容易出现"配置换了但参数表还是旧的"这种不一致。
@@ -384,25 +383,6 @@ export function useLauncher(): LauncherController {
     [api, config, run],
   );
 
-  /**
-   * 导入原版启动器 v1.9 的配置。
-   *
-   * 迁移失败时主进程不会抛错，而是返回当前状态 + 一条含原因的 warning，
-   * 所以这里照常刷新即可（用户能在提醒区看到"迁移失败：..."）。
-   */
-  const migrate = useCallback(
-    () =>
-      run("migrate", async () => {
-        if (api === null) return;
-        const result = await api.migrateConfig();
-        if (result.canceled) return;
-        if (result.payload !== null) reloadFrom(result.payload);
-        if (result.warnings.length > 0) setWarnings(result.warnings);
-        await refreshSchema();
-      }),
-    [api, refreshSchema, reloadFrom, run],
-  );
-
   /** 用系统浏览器打开 llama-server 自带的 WebUI（地址由主进程按实际端口推导） */
   const openWebUi = useCallback(
     () =>
@@ -561,7 +541,6 @@ export function useLauncher(): LauncherController {
     openConfig,
     save,
     saveAs,
-    migrate,
     openWebUi,
     pick,
     clearLogs,

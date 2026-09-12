@@ -5,7 +5,7 @@
  * 于是它可以被 CLI、被单测直接驱动，而不是只能通过点界面来验证。
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { formatArgv } from "../core/args.ts";
 import { DEFAULT_CONFIG, discoverLlamaDir, loadConfigFile, normalizeConfig, resolveServerExe, saveConfigFile } from "../core/config.ts";
@@ -219,27 +219,6 @@ export class LauncherSession {
     this.invalidateCapabilities();
     this.reloadConfig();
     return this.bootstrapPayload();
-  }
-
-  /**
-   * 导入 v1.9（原版启动器）的配置：迁移字段、保留未知键，并落到新文件。
-   *
-   * 输出文件名固定为源文件同目录下的 `llama-launcher.json`（不覆盖源文件），
-   * 迁移后本会话即切换到这个新文件。
-   *
-   * @param path 原版启动器的 `llama_launcher_config.json` 路径
-   * @returns 新的初始化载荷，`warnings` 里含迁移说明与全部归一化告警
-   * @throws {Error} 源文件读不到或不是合法 JSON 时抛出（由 `readFileSync` / `JSON.parse` 抛出）
-   */
-  migrateFrom(path: string): BootstrapPayload {
-    const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
-    const { config, warnings } = normalizeConfig(raw);
-    const target = join(dirname(path), "llama-launcher.json");
-    saveConfigFile(target, config);
-    this.configPath = target;
-    this.invalidateCapabilities();
-    const payload = this.bootstrapPayload();
-    return { ...payload, warnings: [`已从 ${path} 迁移，未知键已保留`, ...warnings, ...payload.warnings] };
   }
 
   /**

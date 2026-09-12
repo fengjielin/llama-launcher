@@ -448,26 +448,6 @@ function registerIpc(): void {
     return { canceled: false, path, payload, warnings: payload.warnings };
   });
 
-  ipcMain.handle(IPC.configMigrate, async (): Promise<ConfigFileResult> => {
-    const picked = await showOpen({
-      title: "选择原版启动器 v1.9 的 llama_launcher_config.json",
-      filters: [{ name: "JSON 配置", extensions: ["json"] }],
-      properties: ["openFile"],
-    });
-    const path = picked.filePaths[0];
-    if (picked.canceled || path === undefined) return { canceled: true, path: null, payload: null, warnings: [] };
-    try {
-      const payload = s().migrateFrom(path);
-      return { canceled: false, path: payload.configPath, payload, warnings: payload.warnings };
-    } catch (err) {
-      // 迁移失败（选错了文件、JSON 坏了）不该让界面崩掉：
-      // 退回当前状态并只把原因放进 warnings 展示
-      const message = err instanceof Error ? err.message : String(err);
-      const payload = s().bootstrap();
-      return { canceled: false, path: null, payload, warnings: [`迁移失败：${message}`] };
-    }
-  });
-
   // 通用路径选择：模型/目录/presets.ini 都由界面发起，这里按 kind 决定选文件还是选目录
   ipcMain.handle(IPC.pickPath, async (_e, request: PickPathRequest): Promise<PickPathResult> => {
     const filters = DIALOG_FILTERS[request.kind] ?? [];

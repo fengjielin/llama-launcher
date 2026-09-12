@@ -24,8 +24,6 @@ export const IPC = {
   configSave: "config:save",
   /** 另存为 */
   configSaveAs: "config:saveAs",
-  /** 导入 v1.9（原版启动器）配置 */
-  configMigrate: "config:migrate",
   /** 弹系统文件/目录选择框 */
   pickPath: "dialog:pickPath",
   /** 现场跑 --version/--help，重算能力视图 */
@@ -310,7 +308,6 @@ export interface LlamaApi {
   openConfig(): Promise<ConfigFileResult>;
   saveConfig(config: LauncherConfig): Promise<{ ok: boolean; path: string; warnings: string[] }>;
   saveConfigAs(config: LauncherConfig): Promise<{ canceled: boolean; path: string | null }>;
-  migrateConfig(): Promise<ConfigFileResult>;
   pickPath(request: PickPathRequest): Promise<PickPathResult>;
   detect(): Promise<DetectPayload | ErrorPayload>;
   /** 环境自检：驱动是否配得上这份构建、运行时 DLL 齐不齐、模型能不能装下等 */

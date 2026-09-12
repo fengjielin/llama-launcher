@@ -6,15 +6,14 @@
  *   node src/cli.ts args    [--config PATH] [--help-fixture FILE] [--port N] [--json]
  *   node src/cli.ts run     [--config PATH] [--timeout-ms N] [--open] [--port N]
  *   node src/cli.ts init    [--config PATH] [--force]
- *   node src/cli.ts migrate --from <v1.9配置.json> [--to PATH]
  *
  * 为什么 CLI 先做：core 的所有逻辑都能在没有界面的情况下验证，
  * 命令行的输出同时是 GUI 的对拍基准（同一份配置必须产出同一条命令行）。
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { DEFAULT_CONFIG, discoverLlamaDir, loadConfigFile, normalizeConfig, saveConfigFile } from "./core/config.ts";
+import { dirname, join } from "node:path";
+import { DEFAULT_CONFIG, discoverLlamaDir, loadConfigFile, saveConfigFile } from "./core/config.ts";
 import { describeSteps, formatArgv } from "./core/args.ts";
 import { prepareLaunch, probeServer, summarizeCapabilities } from "./core/launcher.ts";
 import { createCapabilities } from "./core/helpProbe.ts";
@@ -393,7 +392,7 @@ async function cmdRun(flags: Flags): Promise<number> {
 }
 
 // ---------------------------------------------------------------------------
-// init / migrate
+// init
 // ---------------------------------------------------------------------------
 /**
  * `init`：按当前机器的实际情况生成一份可直接用的配置。
@@ -447,37 +446,6 @@ function cmdInit(flags: Flags): number {
   return 0;
 }
 
-/**
- * `migrate`：把原版启动器 v1.9 的配置迁移成新格式。
- *
- * 输出路径默认落在源文件同目录的 `llama-launcher.json`（可用 `--to` 覆盖），
- * 不覆盖源文件；迁移后打印关键项供用户核对（尤其是 `context` 的单位换算结果）。
- *
- * @param flags 命令行开关：`--from`（必填）、`--to`
- * @returns 退出码：成功 `0`；没给 `--from` 时 `1`
- * @throws {Error} 源文件读不到或不是合法 JSON 时抛出（由 `readFileSync` / `JSON.parse` 抛出）
- */
-function cmdMigrate(flags: Flags): number {
-  const from = flagString(flags, "from");
-  if (from === null) {
-    console.error("需要 --from <v1.9 的 llama_launcher_config.json>");
-    return 1;
-  }
-  const raw: unknown = JSON.parse(readFileSync(from, "utf8"));
-  const { config, warnings } = normalizeConfig(raw);
-  const to = flagString(flags, "to") ?? join(dirname(resolve(from)), "llama-launcher.json");
-  saveConfigFile(to, config);
-  console.log(`已迁移：${from} → ${to}`);
-  for (const w of warnings) console.log(`  ⚠ ${w}`);
-  console.log("\n迁移后关键项：");
-  console.log(`  mode        : ${config.mode}`);
-  console.log(`  context     : ${config.context}`);
-  console.log(`  max_predict : ${config.max_predict}`);
-  console.log(`  think       : ${config.think}`);
-  console.log(`  kv          : ${config.kv_k_type} / ${config.kv_v_type}`);
-  return 0;
-}
-
 function printHelp(): void {
   console.log(`llama.cpp 启动器 core（零依赖，可用 CLI 驱动）
 
@@ -486,7 +454,6 @@ function printHelp(): void {
   node src/cli.ts args    [--config PATH] [--help-fixture FILE] [--port N] [--json]
   node src/cli.ts run     [--config PATH] [--timeout-ms N] [--open] [--port N]
   node src/cli.ts init    [--config PATH] [--force]
-  node src/cli.ts migrate --from <v1.9配置.json> [--to PATH]
 
 说明：
   probe   跑 llama-server --version/--help，列出参数改名、不支持、已废弃的情况
@@ -511,7 +478,6 @@ try {
   else if (command === "args") exitCode = await cmdArgs(flags);
   else if (command === "run") exitCode = await cmdRun(flags);
   else if (command === "init") exitCode = cmdInit(flags);
-  else if (command === "migrate") exitCode = cmdMigrate(flags);
   else if (command === "help" || flags["help"] === true) printHelp();
   else {
     console.error(`未知命令：${command}`);

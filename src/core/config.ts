@@ -1,11 +1,10 @@
 /**
  * 配置读写与归一化。
  *
- * 兼容目标：能直接吃 llamaServer启动器v1.9（PyQt6 原版）写出的
- * `llama_launcher_config.json`，以及 llama-oneclick.ps1 里那套默认值。
+ * 输入可以是手写的 JSON，也可以对齐 llama-oneclick.ps1 里那套默认值。
  *
  * 归一化阶段做四件容易出错的事：
- *   1. v1.9 的 `context: 64` 这类「单位不明」的值要识别出来（见下文注释）；
+ *   1. `context: 64` 这类「单位不明」的值要识别出来（见下文注释）；
  *   2. 思考模式与采样默认值联动（Qwen3 两种模式官方给的是两套推荐值，不能混用）；
  *   3. 生成上限必须明显小于 ctx，开了思考还要放宽，否则正文没开始写就被截断；
  *   4. V cache 量化必须有 Flash Attention 撑着，没有就只压 K。
@@ -167,20 +166,18 @@ export interface NormalizeResult {
  *
  * 输入不需要可信：非对象（`null` / 字符串 / 数字）会被当作空配置处理，
  * 因此垃圾输入不会抛异常，最坏结果是拿到一份全默认配置。
- * **未知键原样保留**（迁移 v1.9 配置时不丢数据）。
+ * **未知键原样保留**（手写的额外键不会被丢掉）。
  *
  * 关键分支（顺序有意义）：
- * 1. **v1.9 迁移**：出现 `cpu_threads` / `推测技术` / `mcp_proxy` 之一即判定为老配置，
- *    做键名映射并告警；`mcp_proxy` 没有对应实现，只保留不传递
- * 2. **上下文单位识别**：`context` 取值 `1..512` 且未显式声明单位时按「K」解释（64 → 65536），
+ * 1. **上下文单位识别**：`context` 取值 `1..512` 且未显式声明单位时按「K」解释（64 → 65536），
  *    并明确告警 —— 只识别、不静默改数，用户可以按提示显式声明 `contextUnit`
- * 3. **类型收敛**：数值/布尔/字符串统一走宽松转换，转不出来的保留默认值
- * 4. **模式推断**：显式 `mode` 优先；否则有 `models_dir` 即判为 router
- * 5. **思考模式 → 采样默认值联动**：只填用户**没写过**的字段，
+ * 2. **类型收敛**：数值/布尔/字符串统一走宽松转换，转不出来的保留默认值
+ * 3. **模式推断**：显式 `mode` 优先；否则有 `models_dir` 即判为 router
+ * 4. **思考模式 → 采样默认值联动**：只填用户**没写过**的字段，
  *    因为 Qwen3 思考/非思考是两套官方推荐值，混用会明显掉质量
- * 6. **生成上限**：开思考时至少放宽到 16384；上限不小于上下文时告警（那样上限等于失效）
- * 7. **V cache 量化依赖 Flash Attention**：FA 关了就退回 `f16`，只压 K（否则量化不生效）
- * 8. **推测解码一致性**：`draft-*` 类型却缺草稿模型时告警
+ * 5. **生成上限**：开思考时至少放宽到 16384；上限不小于上下文时告警（那样上限等于失效）
+ * 6. **V cache 量化依赖 Flash Attention**：FA 关了就退回 `f16`，只压 K（否则量化不生效）
+ * 7. **推测解码一致性**：`draft-*` 类型却缺草稿模型时告警
  *
  * @param raw 已 `JSON.parse` 的对象，或任何来源的未知值
  * @returns 归一化后的配置与告警列表；见 {@link NormalizeResult}
@@ -190,22 +187,9 @@ export function normalizeConfig(raw: unknown): NormalizeResult {
   const src: Record<string, unknown> = raw !== null && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const out: LauncherConfig = { ...DEFAULT_CONFIG, ...src };
 
-  // ---- v1.9 专有键迁移 ----
-  const isV19 = "推测技术" in src || "mcp_proxy" in src || "cpu_threads" in src;
-  if (isV19) {
-    const migratedThreads = asNumber(src["cpu_threads"]);
-    if (migratedThreads !== null) out.threads = migratedThreads;
-    const migratedSpec = asBoolOrNull(src["推测技术"]);
-    if (migratedSpec !== null) out.spec_enabled = migratedSpec;
-    warnings.push("检测到 v1.9 格式配置，已迁移（cpu_threads → threads，推测技术 → spec_enabled，未知键保留）");
-    if (src["mcp_proxy"] !== undefined) {
-      warnings.push("v1.9 的 MCP 代理开关暂无对应实现，已原样保留在配置里，未传给 llama-server");
-    }
-  }
-
   // ---- 上下文长度单位 ----
-  // v1.9 的配置里写的是 "context": 64。llama-server 的 -c 是 token 数（16K 档位在 PS1 里是
-  // 32768），64 不可能是 token 数，按「K」解释（64K = 65536）。这里只做识别 + 明确告警，
+  // 有人沿用了「K」的写法：`"context": 64` 表示 64K。而 llama-server 的 -c 收的是 token 数
+  // （16K 档位在 PS1 里写的是 32768），1..512 这个区间不可能是 token 数。这里只做识别 + 明确告警，
   // 不静默改数。
   const ctxRaw = asNumber(src["context"]);
   if (ctxRaw !== null && ctxRaw > 0 && ctxRaw <= 512 && src["contextUnit"] === undefined) {
@@ -220,9 +204,7 @@ export function normalizeConfig(raw: unknown): NormalizeResult {
   // ---- 数值/开关类型收敛 ----
   out.port = asNumber(src["port"]) ?? DEFAULT_CONFIG.port;
   out.host = asString(src["host"]) ?? DEFAULT_CONFIG.host;
-  // 注意 ?? 的顺序：v1.9 的 cpu_threads 已在上面迁移进 out.threads，
-  // 这里 src["threads"] 不存在时不能把迁移结果冲掉
-  out.threads = asNumber(src["threads"]) ?? asNumber(out.threads);
+  out.threads = asNumber(src["threads"]) ?? DEFAULT_CONFIG.threads;
   out.context = out.context === null ? null : asNumber(out.context);
   out.max_predict = asNumber(src["max_predict"]) ?? DEFAULT_CONFIG.max_predict;
   out.fit_target = asNumber(src["fit_target"]) ?? asString(src["fit_target"]) ?? DEFAULT_CONFIG.fit_target;

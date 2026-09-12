@@ -26,6 +26,7 @@ import { prepareLaunch, probeServer } from "../core/launcher.ts";
 import { LlamaServer } from "../core/llamaProcess.ts";
 import type { ServerState } from "../core/llamaProcess.ts";
 import { MetricsSampler } from "../core/metrics.ts";
+import { scanModelDir } from "../core/models.ts";
 import { precheckWarnings, runPrecheck } from "../core/precheck.ts";
 import type { PrecheckReport } from "../core/precheck.ts";
 import {
@@ -44,6 +45,7 @@ import type {
   HealthPayload,
   LogPush,
   MetricsPayload,
+  ModelsPayload,
   PreviewPayload,
   ProfileLoadResult,
   ProfilesPayload,
@@ -381,6 +383,29 @@ export class LauncherSession {
       ...(skipped.length > 0 ? [`同名模型保持配置里原有的预设，未覆盖：${skipped.join("、")}`] : []),
     ];
     return this.bootstrapPayload();
+  }
+
+  /**
+   * 扫模型目录，给界面上「从模型目录选择」的下拉框用。
+   *
+   * 与自检里的模型判定无关（那个只看"这次会加载哪一个"），这里要的是**该目录下所有可选项**：
+   * 模型名 + 路径 + 体积 + 分片是否齐全 + 配置里有没有它的预设。
+   *
+   * @returns 见 {@link ModelsPayload}；目录不存在/读不了时 `models` 为空并带上 `error`（不抛异常）
+   */
+  listModels(): ModelsPayload {
+    const dir = typeof this.config.models_dir === "string" ? this.config.models_dir : "";
+    const scan = scanModelDir(dir);
+    const presets = this.config.presets ?? {};
+    return {
+      dir,
+      exists: scan.exists,
+      models: scan.models.map((model) => ({
+        ...model,
+        hasPreset: Object.prototype.hasOwnProperty.call(presets, model.name),
+      })),
+      ...(scan.error === undefined ? {} : { error: scan.error }),
+    };
   }
 
   /**

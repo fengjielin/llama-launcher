@@ -24,6 +24,7 @@ const api: LlamaApi = {
   saveConfigAs: (config: LauncherConfig) => ipcRenderer.invoke(IPC.configSaveAs, config),
   importPresets: () => ipcRenderer.invoke(IPC.presetsImport),
   pickPath: (request: PickPathRequest) => ipcRenderer.invoke(IPC.pickPath, request),
+  listModels: () => ipcRenderer.invoke(IPC.modelsList),
   detect: () => ipcRenderer.invoke(IPC.detect),
   precheck: (force?: boolean) => ipcRenderer.invoke(IPC.precheck, force === true),
   preview: (config: LauncherConfig) => ipcRenderer.invoke(IPC.preview, config),

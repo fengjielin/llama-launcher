@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { formatMiB } from "../../../core/format.ts";
 import type { LauncherController } from "../hooks/useLauncher.ts";
 import { Badge, Button, NumberInput, Select, TextInput, Toggle } from "./ui.tsx";
 
@@ -67,6 +68,8 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
     profilesDir,
     settings,
     suggestions,
+    models,
+    refreshModels,
     update,
     pick,
     start,
@@ -87,6 +90,36 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
   const running = status?.running === true;
   /** 配置里定义了预设的模型名（预设现在存在配置里，不再是外部 ini） */
   const presetNames = Object.keys(config.presets ?? {});
+
+  // ---- 单模型模式：「从模型目录选择」下拉框 ----
+  const scanned = models?.models ?? [];
+  /** 当前主模型正好等于某个扫到的模型时，下拉框显示它；否则回落到"未选择" */
+  const selectedFromDir = scanned.find((m) => m.path === config.main_model)?.path ?? "";
+  /** 选项标签顺带带上体积/分片/预设信息，挑模型时不用再去目录里看 */
+  const describeModel = (m: (typeof scanned)[number]): string => {
+    const parts = [m.name];
+    if (m.sizeMiB !== null) parts.push(formatMiB(m.sizeMiB));
+    if (m.shardCount > 1) parts.push(`${m.shardCount} 个分片`);
+    if (m.declaredShards !== null && m.shardCount < m.declaredShards) {
+      parts.push(`⚠ 只找到 ${m.shardCount}/${m.declaredShards} 个分片`);
+    }
+    if (m.hasPreset) parts.push("有预设");
+    return parts.join(" · ");
+  };
+  const dirOptions = [
+    { value: "", label: scanned.length === 0 ? "（目录里没有 .gguf）" : "（未选择，用 preload_model 兜底）" },
+    ...scanned.map((m) => ({ value: m.path, label: describeModel(m) })),
+  ];
+  /** 下拉框下面那行说明：目录对不上/读不了时如实说，别只给一个空下拉框 */
+  const dirHint =
+    models === null
+      ? "正在扫描模型目录…"
+      : models.error !== undefined
+        ? `⚠ ${models.error}`
+        : scanned.length === 0
+          ? `模型目录 ${models.dir} 里没有 .gguf（只扫顶层，分片模型会自动合并成一条）`
+          : `共 ${scanned.length} 个模型（目录：${models.dir}）`;
+
   const presetModels = preview?.preset?.models ?? [];
   const preloadValue = typeof config.preload_model === "string" ? config.preload_model : "";
   const preloadOptions = [
@@ -210,16 +243,47 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
             </div>
           </>
         ) : (
-          <PathRow
-            label="主模型（-m）"
-            value={typeof config.main_model === "string" ? config.main_model : ""}
-            placeholder="点「浏览…」选择 .gguf"
-            hint="留空时会用配置里的 preload_model（配合模型目录）自动推出，所以这里不填也能跑；填了就以这里为准"
-            suggestion={suggestions.mainModel}
-            onUseSuggestion={(path) => update({ main_model: path })}
-            onPick={() => void pick("main_model", "gguf", "选择主模型")}
-            onChange={(next) => update({ main_model: next ?? "" })}
-          />
+          <>
+            {/*
+              单模型模式的主模型：主入口做成"从模型目录里挑"。
+              手输完整路径太容易错，而模型本来就在 models_dir 里；路径框仍然保留，
+              放别处的模型走「浏览…」，两者改的是同一个字段（main_model）。
+            */}
+            <div className="space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] text-slate-400">从模型目录选择</span>
+                <Button
+                  onClick={() => void refreshModels()}
+                  className="px-1.5 py-0.5"
+                  title="重新扫描模型目录（在目录里新加了模型之后点一下）"
+                >
+                  重新扫描
+                </Button>
+              </div>
+              <Select
+                className="w-full"
+                value={selectedFromDir}
+                options={dirOptions}
+                disabled={dirOptions.length <= 1}
+                onChange={(next) => {
+                  if (next === "") return;
+                  const picked = models?.models.find((m) => m.path === next);
+                  if (picked !== undefined) update({ main_model: picked.path });
+                }}
+              />
+              <p className="text-[10px] leading-4 text-slate-500">{dirHint}</p>
+            </div>
+            <PathRow
+              label="主模型（-m）"
+              value={typeof config.main_model === "string" ? config.main_model : ""}
+              placeholder="点「浏览…」选择 .gguf"
+              hint="留空时会用配置里的 preload_model（配合模型目录）自动推出，所以这里不填也能跑；填了就以这里为准"
+              suggestion={suggestions.mainModel}
+              onUseSuggestion={(path) => update({ main_model: path })}
+              onPick={() => void pick("main_model", "gguf", "选择主模型")}
+              onChange={(next) => update({ main_model: next ?? "" })}
+            />
+          </>
         )}
 
         <PathRow

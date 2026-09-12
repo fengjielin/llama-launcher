@@ -36,3 +36,6 @@ import "./closePolicy.test.ts";
 
 // ---- 纯格式化（渲染层也用的叶子模块）----
 import "./format.test.ts";
+
+// ---- 模型目录扫描（单模型模式的下拉框）----
+import "./models.test.ts";

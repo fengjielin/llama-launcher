@@ -18,6 +18,7 @@ import { IPC } from "../shared/ipc.ts";
 import type {
   AppSettings,
   AppSettingsPayload,
+  ModelsPayload,
   ConfigFileResult,
   MetricsPayload,
   PickKind,
@@ -474,6 +475,8 @@ function registerIpc(): void {
       return { canceled: false, path: null, payload, warnings: [`导入失败：${message}`] };
     }
   });
+
+  ipcMain.handle(IPC.modelsList, (): ModelsPayload => s().listModels());
 
   // 通用路径选择：模型/目录/presets.ini 都由界面发起，这里按 kind 决定选文件还是选目录
   ipcMain.handle(IPC.pickPath, async (_e, request: PickPathRequest): Promise<PickPathResult> => {

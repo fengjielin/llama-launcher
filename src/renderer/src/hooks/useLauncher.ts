@@ -13,6 +13,7 @@ import type {
   ErrorPayload,
   LogPush,
   MetricsPayload,
+  ModelsPayload,
   PathSuggestions,
   PickKind,
   PreviewPayload,
@@ -47,6 +48,10 @@ export interface LauncherController {
   notices: string[];
   /** 探测到的可一键填入路径（见 PathSuggestions）：输入框里的灰字只是示例，不是值 */
   suggestions: PathSuggestions;
+  /** 模型目录扫描结果：单模型模式「主模型」下拉框的数据源 */
+  models: ModelsPayload | null;
+  /** 手动重扫模型目录（用户在目录里加了模型之后） */
+  refreshModels: () => Promise<void>;
   detect: DetectPayload | null;
   detectError: string | null;
   preview: PreviewPayload | null;
@@ -158,6 +163,8 @@ export function useLauncher(): LauncherController {
   const flashTimer = useRef<number | null>(null);
   /** 主进程探测到的、可一键填入的路径（空串表示没探到） */
   const [suggestions, setSuggestions] = useState<PathSuggestions>({ modelsDir: "", presetPath: "", mainModel: "" });
+  /** 模型目录扫描结果（单模型模式「主模型」下拉框的数据源） */
+  const [models, setModels] = useState<ModelsPayload | null>(null);
 
   /**
    * 用一次初始化载荷整体替换本地状态（启动、打开配置后都走它）。
@@ -215,6 +222,21 @@ export function useLauncher(): LauncherController {
     const payload = await api.listProfiles();
     setProfiles(payload.profiles);
     setProfilesDir(payload.dir);
+  }, [api]);
+
+  /**
+   * 重新扫模型目录（单模型模式下拉框的数据源）。
+   *
+   * 失败不弹错：模型目录读不了是常见状态（还没设置 / 盘没挂上），
+   * `models.error` 本身就带着原因，界面按"提示"渲染即可。
+   */
+  const refreshModels = useCallback(async () => {
+    if (api === null) return;
+    try {
+      setModels(await api.listModels());
+    } catch {
+      setModels(null);
+    }
   }, [api]);
 
   // ---- 初始化：拉配置 + 订阅推送 + 探测能力 ----
@@ -282,6 +304,13 @@ export function useLauncher(): LauncherController {
       void api.metricsWatch(false);
     };
   }, [api, reloadFrom, refreshSchema, refreshProfiles]);
+
+  // ---- 模型目录变化 → 重扫下拉框数据 ----
+  // 依赖里放的是 `models_dir` 本身而不是整个 config：改别的参数时没必要重扫目录。
+  useEffect(() => {
+    if (api === null) return;
+    void refreshModels();
+  }, [api, config?.models_dir, refreshModels]);
 
   // ---- 配置变化 → 防抖后重拼命令行 ----
   // busy 不为空时（正在启动/停止/保存）先不重拼：那期间配置本来就不会变，
@@ -629,6 +658,8 @@ export function useLauncher(): LauncherController {
     warnings,
     notices,
     suggestions,
+    models,
+    refreshModels,
     detect,
     detectError,
     preview,

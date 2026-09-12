@@ -12,6 +12,7 @@ import type { BuildStep, LauncherConfig } from "../core/types.ts";
 import type { ParamGroup, ValueKind } from "../core/types.ts";
 import type { LogEventKind, LogMetrics } from "../core/logLines.ts";
 import type { MetricsSample, MetricsSeries } from "../core/metrics.ts";
+import type { ScannedModel } from "../core/models.ts";
 import type { PrecheckReport } from "../core/precheck.ts";
 import type { ProfileInfo } from "../core/profiles.ts";
 
@@ -28,6 +29,8 @@ export const IPC = {
   presetsImport: "presets:import",
   /** 弹系统文件/目录选择框 */
   pickPath: "dialog:pickPath",
+  /** 扫模型目录，给「从模型目录选择」下拉框提供数据 */
+  modelsList: "models:list",
   /** 现场跑 --version/--help，重算能力视图 */
   detect: "llama:detect",
   /** 跑一遍环境自检（驱动/CUDA 运行时/模型/端口） */
@@ -151,8 +154,7 @@ export interface DetectPayload {
   schema: SchemaPayload;
 }
 
-export interface PresetPayload {
-  /** 真正传给 llama-server 的路径 */
+export interface PresetPayload {  /** 真正传给 llama-server 的路径 */
   argPath: string;
   /** 是否因为非 ASCII 路径 / 剔除启动器自用段而做了临时拷贝 */
   staged: boolean;
@@ -162,6 +164,23 @@ export interface PresetPayload {
   defaultModel: string | null;
   /** 模型段名列表 */
   models: string[];
+}
+
+/**
+ * 模型目录的扫描结果（单模型模式下「主模型」下拉框的数据源）。
+ *
+ * 只包含**能直接拿去当 `-m` 的值**（分片模型是第一个分片），外加两个提示用的字段：
+ * 是否有预设、以及分片是否齐全（`shardCount !== declaredShards` 就是没下完）。
+ */
+export interface ModelsPayload {
+  /** 扫描的目录（配置里的 `models_dir`） */
+  dir: string;
+  /** 目录是否存在 */
+  exists: boolean;
+  /** 扫到的模型（`ScannedModel` 加上"配置里有没有它的预设"） */
+  models: (ScannedModel & { hasPreset: boolean })[];
+  /** 目录为空 / 不存在 / 读不了时的原因 */
+  error?: string;
 }
 
 /**
@@ -338,6 +357,12 @@ export interface LlamaApi {
    */
   importPresets(): Promise<ConfigFileResult>;
   pickPath(request: PickPathRequest): Promise<PickPathResult>;
+  /**
+   * 扫当前配置里的模型目录，列出可选的 .gguf（分片已合并成一条）。
+   *
+   * 单模型模式的「主模型」用它渲染下拉框 —— 手输完整路径太容易错，而模型名本来就在目录里。
+   */
+  listModels(): Promise<ModelsPayload>;
   detect(): Promise<DetectPayload | ErrorPayload>;
   /** 环境自检：驱动是否配得上这份构建、运行时 DLL 齐不齐、模型能不能装下等 */
   precheck(force?: boolean): Promise<PrecheckReport>;

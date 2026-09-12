@@ -93,11 +93,12 @@ test("诊断：端口占用 / presets 解析失败 / 找不到模型", () => {
 
   const preset = diagnose(["error: failed to parse server config file from 'presets.ini'"]);
   assert.equal(preset?.code, "preset-parse");
-  assert.ok(preset?.suggestions.some((s) => s.includes("BOM")));
+  // 预设现在是启动器从配置渲染出来的，建议要指向配置里的 presets 字段
+  assert.ok(preset?.suggestions.some((s) => s.includes("presets")), preset?.suggestions.join(" | "));
 
   const noModels = diagnose(["main: no models found in the models directory"]);
   assert.equal(noModels?.code, "no-models");
-  assert.ok(noModels?.suggestions.some((s) => s.includes("段名")));
+  assert.ok(noModels?.suggestions.some((s) => s.includes("presets")), noModels?.suggestions.join(" | "));
 
   const unsupported = diagnose(["error: option not recognized: --draft-type-k"]);
   assert.equal(unsupported?.code, "option-unsupported");

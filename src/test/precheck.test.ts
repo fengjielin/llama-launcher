@@ -44,7 +44,8 @@ function facts(over: Partial<PrecheckFacts> = {}): PrecheckFacts {
     modelSizeMiB: 4096,
     modelMagicOk: true,
     portFree: true,
-    presetPathNonAscii: false,
+    presetModelCount: 0,
+    legacyPresetPath: "",
     ...over,
   };
 }
@@ -223,9 +224,19 @@ test("小模型 → ok", () => {
   assert.match(item?.title ?? "", /余量充足/);
 });
 
-test("端口被占用 → warn；presets 路径含中文 → warn", () => {
+test("端口被占用 → warn；预设情况的两种结果", () => {
   assert.equal(itemById(buildPrecheckItems(facts({ portFree: false })), "port")?.level, "warn");
-  assert.equal(itemById(buildPrecheckItems(facts({ presetPathNonAscii: true })), "preset-path")?.level, "warn");
+  // 配了预设 → ok（并报出模型个数）
+  const withPresets = itemById(buildPrecheckItems(facts({ presetModelCount: 5 })), "preset-models");
+  assert.equal(withPresets?.level, "ok");
+  assert.ok(withPresets?.title.includes("5"), withPresets?.title);
+  // 只留了旧的 ini 路径、预设表还是空的 → warn 并指路「导入 presets.ini」
+  const legacy = itemById(
+    buildPrecheckItems(facts({ presetModelCount: 0, legacyPresetPath: "E:\\中文目录\\presets.ini" })),
+    "preset-legacy",
+  );
+  assert.equal(legacy?.level, "warn");
+  assert.ok(legacy?.suggestion?.includes("导入"), legacy?.suggestion);
 });
 
 test("没有 CUDA 后端 → info 并提示换发行包", () => {

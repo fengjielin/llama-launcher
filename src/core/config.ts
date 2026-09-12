@@ -56,6 +56,8 @@ export const DEFAULT_CONFIG: LauncherConfig = {
   ubatch_size: null,
   parallel: null,
   models_max: null,
+  // 预设默认空表：形状稳定，界面判断"有没有预设"不必再判 undefined
+  presets: {},
   spec_enabled: false,
   mlock: false,
   no_mmap: false,
@@ -264,6 +266,44 @@ export function normalizeConfig(raw: unknown): NormalizeResult {
       : "single";
   out.mode = mode;
 
+  // ---- 模型预设（JSON 原生格式）----
+  // 只做形状收敛：模型名 → 参数表，值必须是字符串/数字/布尔。
+  // 值一律"写什么就传什么"（渲染时 String(value)），所以这里不做类型翻译，
+  // 也无法识别的条目宁可丢掉并告警，也不要让一个坏条目把整份预设废掉。
+  const presetsRaw = src["presets"];
+  if (presetsRaw !== undefined) {
+    if (presetsRaw === null || typeof presetsRaw !== "object" || Array.isArray(presetsRaw)) {
+      warnings.push("presets 必须是「模型名 → 参数表」的对象，已忽略这个字段");
+      out.presets = {};
+    } else {
+      const cleaned: Record<string, Record<string, string | number | boolean>> = {};
+      for (const [model, params] of Object.entries(presetsRaw as Record<string, unknown>)) {
+        if (model.trim() === "") {
+          warnings.push("presets 里有一个空的模型名，已忽略该段");
+          continue;
+        }
+        if (params === null || typeof params !== "object" || Array.isArray(params)) {
+          warnings.push(`presets 里的 ${model} 不是「键 → 值」的对象，已忽略该段`);
+          continue;
+        }
+        const table: Record<string, string | number | boolean> = {};
+        for (const [key, value] of Object.entries(params as Record<string, unknown>)) {
+          if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+            table[key] = value;
+          } else {
+            warnings.push(`presets 里 ${model} 的 ${key} 值不是字符串/数字/布尔，已忽略该项`);
+          }
+        }
+        if (Object.keys(table).length === 0) {
+          warnings.push(`presets 里的 ${model} 没有任何有效参数，已忽略该段`);
+          continue;
+        }
+        cleaned[model] = table;
+      }
+      out.presets = cleaned;
+    }
+  }
+
   // ---- 思考模式 → 采样默认值联动（用户显式写过的值不覆盖）----
   const thinkingKey: "on" | "off" = out.think === "on" ? "on" : "off";
   const presetSampling = SAMPLING_BY_THINKING[thinkingKey];
@@ -336,6 +376,7 @@ export function saveConfigFile(path: string, config: LauncherConfig): void {
     "mode",
     "main_model",
     "models_dir",
+    "presets",
     "models_preset",
     "models_max",
     "preload_model",

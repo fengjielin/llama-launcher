@@ -64,7 +64,7 @@ export const PARAM_SPECS: readonly ParamSpec[] = [
     group: "model",
     kind: "string",
     candidates: ["--models-preset"],
-    hint: "presets.ini；路径含非 ASCII 字符会让 llama-server 直接崩退，需先拷到 ASCII 路径",
+    hint: "旧字段：仅在导入 presets.ini 时写入作参考；实际预设以配置里的 presets 字段为准",
   },
   {
     key: "models_max",

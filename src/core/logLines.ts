@@ -254,11 +254,11 @@ const DIAGNOSIS_RULES: readonly DiagnosisRule[] = [
   {
     code: "preset-parse",
     re: /failed to parse server config file|error parsing|ini/i,
-    summary: "presets.ini 解析失败",
+    summary: "传给 llama-server 的模型预设解析失败",
     suggestions: [
-      "文件必须是 UTF-8 且【不带 BOM】，带 BOM 会直接解析失败",
-      "行尾不要有 Windows 以外的怪字符，键值用 `key = value`",
-      "路径含中文会让 llama-server 崩退，先把 presets.ini 拷到纯 ASCII 路径再传",
+      "这份 ini 是启动器从配置的 presets 字段渲染出来的（在 %TEMP%\\llama-launcher-presets.ini），问题基本都在配置里",
+      "检查 presets 里的键名/值是不是 llama.cpp 认的（如 ctx-size / cache-type-k / fit-target / load-mode）",
+      "值不要写复杂结构：只支持字符串、数字、布尔",
     ],
   },
   {
@@ -273,10 +273,10 @@ const DIAGNOSIS_RULES: readonly DiagnosisRule[] = [
   {
     code: "no-models",
     re: /no models found|loaded 0 custom model presets|no model specified|no model provided/i,
-    summary: "没有找到可用模型（或 preset 段名与模型名不匹配）",
+    summary: "没有找到可用模型（或预设里的段名与模型名不匹配）",
     suggestions: [
       "--models-dir 指向的目录里要有 .gguf 文件",
-      "presets.ini 的段名必须等于模型名（GGUF 文件名去掉 .gguf），[*] 通配段不被支持",
+      "配置 presets 里的模型名必须等于真实模型名（GGUF 文件名去掉 .gguf），不支持通配段",
       "启动后看日志里模型名旁有没有 *，有 * 才表示吃到了自定义 preset",
     ],
   },

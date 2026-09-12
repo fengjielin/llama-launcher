@@ -125,7 +125,25 @@ export interface LauncherConfig {
   main_model?: string;
   /** router 模式的模型目录 */
   models_dir?: string;
-  /** router 模式的 presets.ini 路径 */
+  /**
+   * 模型预设：**配置里直接写成 JSON**（不再依赖外部的 presets.ini）。
+   *
+   * 形状是「模型名 → 参数表」，键名沿用 llama.cpp `--models-preset` 自己的键
+   * （`ctx-size` / `cache-type-k` / `fit-target` / `load-mode` / `threads` / 采样参数…），
+   * 因为这张表本质就是"给 llama-server 的参数覆盖表"，启动时由启动器渲染成它认的 ini 再传路径。
+   * 键名不做我们自己的翻译，写什么就传什么 —— 免得 llama.cpp 加了新键我们还得跟着改代码。
+   *
+   * 段名 = 模型名（GGUF 文件名去掉 `.gguf`），与 llama-server 的 `Available models` 一致。
+   * 启动器自己的 `default-model` 约定不再放这里 —— 它对应配置里的 {@link LauncherConfig.preload_model}。
+   */
+  presets?: Record<string, Record<string, string | number | boolean>>;
+  /**
+   * 旧的 presets.ini 路径，**仅用于导入**。
+   *
+   * 早先这个路径会被原样传给 `--models-preset`，带来两个麻烦：中文路径会让 llama-server 崩退
+   * （必须每次转存到 %TEMP%）、`[defaults]` 段会被服务器当成一个假模型。
+   * 现在预设以 {@link LauncherConfig.presets} 为准；这个字段只在 presets 为空时用来做一次性导入。
+   */
   models_preset?: string;
   /** router 模式同时加载的模型数上限 */
   models_max?: number | null;
@@ -259,12 +277,13 @@ export interface BuildInput {
   presetKeys?: readonly string[];
   /** 已解析出的预加载模型绝对路径；null = 不预加载 */
   preloadModelFile?: string | null;
-  /** 预加载模型在 presets.ini 里的 ctx-size（实测预加载时 preset 不生效，需 CLI 直传） */
+  /** 预加载模型在配置预设里的 ctx-size（实测预加载时 preset 不生效，需 CLI 直传） */
   preloadCtxFromPreset?: number | null;
   /**
-   * 真正要传给 --models-preset 的路径。
-   * 配置里的路径含非 ASCII 时，调用方应先用 presets.stagePresetIfNonAscii() 拷到
-   * ASCII 目录，再把拷贝后的路径放这里（buildArgs 本身不做文件操作，保持纯函数）。
+   * 真正要传给 `--models-preset` 的路径。
+   *
+   * 预设存在配置里（JSON），调用方负责把它渲染成 ini 写到临时文件，再把那个路径放这里 ——
+   * `buildArgs` 本身不做文件操作，保持纯函数。
    */
   presetArgPath?: string | null;
   /** 是否禁用 GPU（纯 CPU 场景下不再回退 -ngl 99） */

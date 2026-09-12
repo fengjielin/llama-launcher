@@ -1,45 +1,45 @@
 /**
- * presets.ini 解析（llama-server 的 --models-preset 文件）。
+ * 模型预设（llama-server 的 `--models-preset`）。
  *
- * 实测约束（来自 llama-oneclick.ps1 的踩坑记录，全部保留为代码里的规则）：
- *   1. 段名 = 模型名（GGUF 文件名去掉 .gguf）；`[*]` 通配段不被支持。
- *   2. 文件必须是 UTF-8 且【不带 BOM】，否则 llama-server 直接报
- *      "failed to parse server config file"。
- *   3. preset 与命令行同时给同一个键时，命令行优先级更高（实测），
- *      所以 preset 里定义过的键，命令行不能再传。
- *   4. `--models-preset` 的路径含非 ASCII 字符（如中文目录名）会让 llama-server
- *      刷两行日志后立刻崩退 → 需要先拷到 ASCII 路径再传。
- *   5. `[defaults]` 段里只能写注释形式的 `; default-model = xxx`，
- *      写未注释的自定义键会让 llama-server 报 option not recognized 直接退出。
+ * ## 现在以 JSON 为准
+ *
+ * 预设**直接写在配置文件的 `presets` 字段里**（`{ "模型名": { "ctx-size": 16384, ... } }`），
+ * 启动时由 {@link renderPresetFile} 渲染成 llama-server 认的 ini、写到一个临时文件再传路径。
+ * 也就是说 ini 只是"给服务器看的中间产物"，用户不再需要维护它 —— 它只作为**一次性导入来源**
+ * （{@link presetsJsonFromPresetFile} + {@link parsePresetsIni}）。
+ *
+ * 这么做顺带消掉了 ini 时代的两个麻烦：
+ *   1. `--models-preset` 传非 ASCII 路径会让 llama-server 刷两行日志后崩退 —— 现在路径由我们
+ *      自己生成在 `%TEMP%`，不可能带中文；
+ *   2. `[defaults]` 段会被服务器当成一个名叫 defaults 的假模型 —— 现在这份 ini 由我们生成，
+ *      根本不会写出这样的段。
+ *
+ * ## 仍然成立的 llama.cpp 规则（渲染与导入都要遵守）
+ *
+ *   · 段名 = 模型名（GGUF 文件名去掉 `.gguf`），`[*]` 通配段不被支持；
+ *   · ini 必须 UTF-8 且**不带 BOM**，否则服务器报 "failed to parse server config file"；
+ *   · 同一个键 preset 与命令行都给时，命令行优先（实测），所以 preset 里定义过的键命令行不能再传。
  */
 
-import { copyFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
- * 只有启动器自己关心的段名。
+ * 解析后的 presets.ini 的内存形态。
  *
- * 实测（b10488）：llama-server **不会**忽略 `[defaults]`，而是把它当成一个名叫
- * "defaults" 的模型 —— 启动日志里会出现
- *   `Loaded 6 custom model presets` / `Available models (6)` 且其中一行是 `* defaults`，
- * 于是网页下拉框里多出一个假模型，还白占一个 --models-max 槽位。
- * 所以传给 llama-server 的那份文件要把这些段剔掉（读配置仍然从原文件读）。
- */
-export const LAUNCHER_ONLY_SECTIONS: readonly string[] = ["defaults"];
-
-/**
- * 解析后的 presets.ini。
- *
- * 只做"读"，不做任何写回：传给 llama-server 的那一份由 {@link renderPresetForServer} 另生成。
+ * 只做"读"：传给 llama-server 的那一份由 {@link renderPresetFile} 从 JSON 现渲染。
  */
 export interface PresetFile {
   /** 段落名 → 键值（键名统一小写，取原始键名时用 rawKeys） */
   sections: Map<string, Map<string, string>>;
-  /** [defaults] 段里的 default-model（注释形式也认） */
+  /** [defaults] 段里的 default-model（注释形式也认）；对应配置里的 `preload_model` */
   defaultModel: string | null;
   /** 各段出现的键名原始大小写，用于展示 */
   rawKeys: Map<string, string[]>;
 }
+
+/** 模型预设的 JSON 形态：模型名 → 参数表（键名沿用 llama.cpp 的预设键） */
+export type PresetJson = Record<string, Record<string, string | number | boolean>>;
 
 /** 去掉 UTF-8 BOM：带 BOM 的文件会让 llama-server 直接报解析失败 */
 function stripBom(text: string): string {
@@ -157,51 +157,110 @@ export function getNumericPresetValue(file: PresetFile, modelId: string, key: st
 }
 
 /**
- * 判断路径里是否含非 ASCII 字符（中文、全角符号等）。
+ * 把配置里的 JSON 预设转成内存形态（{@link PresetFile}），供接管判断与渲染复用。
  *
- * 存在这个检查是因为实测：`--models-preset` 传非 ASCII 路径时，
- * llama-server 会刷两行日志后立刻崩退，而不是给出可读的报错。
+ * 值一律按"写什么就传什么"处理（`String(value)`）：布尔写成 `true` / `false`，
+ * 数字保持字面量。这样 llama.cpp 将来新增预设键，本启动器不需要跟着改代码。
  *
- * 判定范围是 `\x20-\x7e` 之外的所有字符，因此空格与常见符号都算 ASCII。
- *
- * @param path 待检查的路径（Windows 反斜杠路径同样适用）
- * @returns 含非 ASCII 字符返回 `true`
+ * @param presets 配置里的 `presets` 字段：模型名 → 参数表
+ * @param defaultModel 预加载模型名，会作为 `defaultModel` 带进结果（对应旧 ini 的 default-model）
+ * @returns 内存形态；`sections` 的键名小写化，`rawKeys` 保留用户写的原始大小写
  */
-export function hasNonAsciiPath(path: string): boolean {
-  return /[^\x20-\x7e]/.test(path);
+export function presetFileFromJson(presets: PresetJson, defaultModel: string | null = null): PresetFile {
+  const sections = new Map<string, Map<string, string>>();
+  const rawKeys = new Map<string, string[]>();
+  for (const [model, params] of Object.entries(presets)) {
+    const map = new Map<string, string>();
+    const raw: string[] = [];
+    for (const [key, value] of Object.entries(params)) {
+      map.set(key.toLowerCase(), String(value));
+      raw.push(key);
+    }
+    sections.set(model, map);
+    rawKeys.set(model, raw);
+  }
+  return { sections, defaultModel, rawKeys };
 }
 
 /**
- * 生成「只含模型段」的 presets 文本：剔除启动器自用的段（见 {@link LAUNCHER_ONLY_SECTIONS}）。
+ * 把解析好的 ini 转成 JSON 预设（一次性导入用）。
  *
- * 为什么需要单独生成一份：`[defaults]` 段是启动器的约定，但 llama-server 会把它当成
- * 一个名叫 `defaults` 的模型列进「可用模型」，于是网页下拉框里多出一个假模型。
- * 读配置仍从原文件读，只有**递给 llama-server 的那一份**被裁剪。
+ * `[defaults]` 段不进结果：它里面只有启动器自用的 `default-model` 约定，
+ * 对应配置里的 `preload_model`，不该出现在模型参数表里。
  *
- * 边界：注释行、空行、模型段一律原样保留（方便用户对着传给 llama-server 的文件排查问题）；
- * 被剔除的段连同它的内容一起跳过；段头大小写敏感（与 llama-server 一致）。
- *
- * @param text presets.ini 的原始文本
- * @returns `text` 为裁剪后的文本（行尾统一为 `\n`），`removedSections` 为被剔除的段名（去重）
+ * @param file {@link parsePresetsIni} 的结果
+ * @returns 模型名 → 参数表；键名用 ini 里的原始大小写
  */
-export function renderPresetForServer(text: string): { text: string; removedSections: string[] } {
-  const kept: string[] = [];
-  const removedSections: string[] = [];
-  let skipping = false;
-
-  for (const line of stripBom(text).split(/\r?\n/)) {
-    const section = /^\s*\[(.+?)\]\s*$/.exec(line);
-    if (section && section[1]) {
-      skipping = LAUNCHER_ONLY_SECTIONS.includes(section[1]);
-      if (skipping) {
-        if (!removedSections.includes(section[1])) removedSections.push(section[1]);
-        continue;
-      }
+export function presetsJsonFromPresetFile(file: PresetFile): PresetJson {
+  const out: PresetJson = {};
+  for (const [model, params] of file.sections) {
+    if (model === "defaults") continue;
+    const table: Record<string, string | number> = {};
+    const raws = file.rawKeys.get(model) ?? [];
+    for (const [lowerKey, value] of params) {
+      // 尽量按原始大小写还原键名（rawKeys 与 sections 顺序一致）
+      const rawKey = raws.find((k) => k.toLowerCase() === lowerKey) ?? lowerKey;
+      // 纯十进制整数在 JSON 里写成数字更好读；其余（q4_0 / mmap+mlock 等）保持字符串
+      table[rawKey] = /^-?\d+$/.test(value) ? Number(value) : value;
     }
-    if (!skipping || line.trim() === "") kept.push(line);
+    out[model] = table;
   }
+  return out;
+}
 
-  return { text: kept.join("\n"), removedSections };
+/**
+ * 把内存形态渲染成 llama-server 认的 ini 文本。
+ *
+ * 输出特点：
+ * - 段名即模型名，段内一行一个 `键 = 值`；
+ * - **不会**写出 `[defaults]` 这类启动器自用段（那份 ini 是我们生成的，不需要再剔除）；
+ * - 行尾统一 `\n`，由 {@link stagePresetText} 以 UTF-8 无 BOM 写入 —— 带 BOM 会让服务器解析失败；
+ * - 空参数表的模型段会被跳过（写一个空段没有意义，还可能被服务器当成模型占位）。
+ *
+ * @param file 内存形态的预设
+ * @returns ini 文本；没有任何有效模型段时返回空串
+ */
+export function renderPresetFile(file: PresetFile): string {
+  const blocks: string[] = [];
+  for (const [model, params] of file.sections) {
+    if (model === "defaults" || params.size === 0) continue;
+    const raws = file.rawKeys.get(model) ?? [];
+    const lines = [`[${model}]`];
+    for (const [lowerKey, value] of params) {
+      const rawKey = raws.find((k) => k.toLowerCase() === lowerKey) ?? lowerKey;
+      lines.push(`${rawKey} = ${value}`);
+    }
+    blocks.push(lines.join("\n"));
+  }
+  return blocks.length === 0 ? "" : `${blocks.join("\n\n")}\n`;
+}
+
+/**
+ * 把导入来的预设并进现有预设表。
+ *
+ * 冲突策略：**同名模型一律保留现有的**，不覆盖 —— 导入是"补充"，不该把用户已经在 JSON 里
+ * 调过的模型悄悄改掉；冲突的模型名会如实报出来，让他自己决定。
+ *
+ * @param existing 配置里现有的 `presets`
+ * @param imported 从 ini 导入的结果
+ * @returns `presets` 为合并结果（新对象，不改入参）；`added` 为新增的模型名；`skipped` 为因同名跳过的
+ */
+export function mergePresets(
+  existing: PresetJson,
+  imported: PresetJson,
+): { presets: PresetJson; added: string[]; skipped: string[] } {
+  const merged: PresetJson = { ...existing };
+  const added: string[] = [];
+  const skipped: string[] = [];
+  for (const [model, params] of Object.entries(imported)) {
+    if (Object.prototype.hasOwnProperty.call(merged, model)) {
+      skipped.push(model);
+      continue;
+    }
+    merged[model] = params;
+    added.push(model);
+  }
+  return { presets: merged, added, skipped };
 }
 
 /**
@@ -209,37 +268,14 @@ export function renderPresetForServer(text: string): { text: string; removedSect
  *
  * 必须用 Node 的 `utf8` 写入（不带 BOM）—— 带 BOM 会让 llama-server 解析失败。
  *
- * @param text 要写入的内容，通常来自 {@link renderPresetForServer}
- * @param asciiDir 目标目录，应当是纯 ASCII 路径
- * @param asciiName 文件名，默认 `llama-launcher-presets.ini`
+ * @param text 要写入的内容，通常来自 {@link renderPresetFile}
+ * @param dir 目标目录（现在是 %TEMP%，由我们自己生成，所以必然是 ASCII 路径）
+ * @param name 文件名，默认 `llama-launcher-presets.ini`
  * @returns 写出的完整路径
  * @throws {Error} 目录不存在或没有写权限时，由 `writeFileSync` 抛出（如 `ENOENT` / `EPERM`）
  */
-export function stagePresetText(text: string, asciiDir: string, asciiName = "llama-launcher-presets.ini"): string {
-  const target = join(asciiDir, asciiName);
+export function stagePresetText(text: string, dir: string, name = "llama-launcher-presets.ini"): string {
+  const target = join(dir, name);
   writeFileSync(target, text, "utf8");
   return target;
-}
-
-/**
- * `--models-preset` 的路径含非 ASCII 时，先原样拷到 ASCII 目录再传。
- *
- * 这是 {@link renderPresetForServer} 出现之前的兜底方案（不裁剪内容，只搬家）；
- * 当前主流程用的是「裁剪 + 写入」，但保留此函数用于只需要搬家的场合。
- *
- * @param presetPath 配置里的 presets.ini 路径
- * @param asciiDir 目标目录，应当是纯 ASCII 路径
- * @param asciiName 目标文件名，默认 `llama-launcher-presets.ini`
- * @returns `argPath` 为最终应传给 llama-server 的路径，`copied` 表示是否真的做了拷贝
- * @throws {Error} 需要拷贝但源文件不存在或目标不可写时，由 `copyFileSync` 抛出
- */
-export function stagePresetIfNonAscii(
-  presetPath: string,
-  asciiDir: string,
-  asciiName = "llama-launcher-presets.ini",
-): { argPath: string; copied: boolean } {
-  if (!hasNonAsciiPath(presetPath)) return { argPath: presetPath, copied: false };
-  const target = join(asciiDir, asciiName);
-  copyFileSync(presetPath, target);
-  return { argPath: target, copied: true };
 }

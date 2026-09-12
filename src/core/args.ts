@@ -14,7 +14,6 @@
  */
 
 import { normalizeThink } from "./config.ts";
-import { hasNonAsciiPath } from "./presets.ts";
 import type { BuildInput, BuildResult, BuildStep, ServerMode, StepReason } from "./types.ts";
 
 /**
@@ -253,7 +252,7 @@ export function buildArgs(input: BuildInput): BuildResult {
         label,
         argv: [],
         reason: "preset-owned",
-        note: `presets.ini 有模型段定义了 ${opts.presetKey}，命令行不重复传（实测命令行优先级更高，会盖掉 preset）`,
+        note: `配置里的预设为某个模型定义了 ${opts.presetKey}，命令行不重复传（实测命令行优先级更高，会盖掉 preset）`,
       });
       return;
     }
@@ -301,7 +300,7 @@ export function buildArgs(input: BuildInput): BuildResult {
     if (!config.models_dir) {
       warnings.push(
         "router 模式但没有设置 models_dir，llama-server 启动后会没有任何可用模型"
-          + "（presets.ini 只负责给模型覆盖参数，不能代替模型目录）",
+          + "（预设 presets 只负责给模型覆盖参数，不能代替模型目录）",
       );
     }
   }
@@ -310,21 +309,16 @@ export function buildArgs(input: BuildInput): BuildResult {
   emit({ key: "host", label: "监听地址", candidates: ["--host"], value: config.host ?? "127.0.0.1" });
   emit({ key: "port", label: "端口", candidates: ["--port"], value: config.port ?? 8080 });
 
-  // =========================================================== 3. router：presets.ini
-  if (mode === "router" && config.models_preset) {
-    const argPath = input.presetArgPath ?? config.models_preset;
-    if (input.presetArgPath == null && hasNonAsciiPath(config.models_preset)) {
-      warnings.push(
-        "--models-preset 路径含非 ASCII 字符，llama-server 会刷两行日志后直接崩退；" +
-          "请先用 presets.stagePresetIfNonAscii() 拷到 ASCII 路径再传",
-      );
-    }
+  // =========================================================== 3. router：模型预设
+  // 预设现在写在配置里（config.presets），这里只报"渲染出来的那份临时 ini"：
+  // 路径由 prepareLaunch 生成，用户不需要（也不该）关心它具体在哪。
+  if (mode === "router" && input.presetArgPath != null) {
     emit({
       key: "models_preset",
-      label: "模型预设文件",
+      label: "模型预设文件（自动生成）",
       candidates: ["--models-preset"],
-      value: argPath,
-      note: "preset 里定义过的键由 preset 按模型接管，命令行不再重复传",
+      value: input.presetArgPath,
+      note: "由配置里的 presets 渲染成临时 ini；preset 里定义过的键按模型接管，命令行不再重复传",
     });
   }
 
@@ -396,7 +390,7 @@ export function buildArgs(input: BuildInput): BuildResult {
     value: ctxValue,
     note:
       isPreload && ctxFromPreset !== null
-        ? `预加载模型不吃 preset，ctx 必须 CLI 直传（取自 presets.ini 的 ctx-size = ${ctxFromPreset}）`
+        ? `预加载模型不吃 preset，ctx 必须 CLI 直传（取自配置预设里的 ctx-size = ${ctxFromPreset}）`
         : undefined,
   });
 

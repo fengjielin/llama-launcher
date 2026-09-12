@@ -23,7 +23,7 @@ import { queryGpus } from "./gpu.ts";
 import type { GpuQueryResult } from "./gpu.ts";
 import { probeTcp } from "./health.ts";
 import { runCapture } from "./llamaProcess.ts";
-import { hasNonAsciiPath } from "./presets.ts";
+
 import { readPeImports } from "./pe.ts";
 import type { PeImports } from "./pe.ts";
 import type { LauncherConfig } from "./types.ts";
@@ -73,8 +73,10 @@ export interface PrecheckFacts {
   modelMagicOk: boolean | null;
   /** 配置里的监听端口是否空闲；无法判断时为 `null` */
   portFree: boolean | null;
-  /** presets.ini 路径是否含非 ASCII 字符 */
-  presetPathNonAscii: boolean;
+  /** 配置里定义了预设的模型个数（`presets` 字段），0 表示没配 */
+  presetModelCount: number;
+  /** 配置里还留着旧的 presets.ini 路径、但还没把内容并进 `presets` */
+  legacyPresetPath: string;
 }
 
 /** 自检报告 */
@@ -461,14 +463,21 @@ export function buildPrecheckItems(facts: PrecheckFacts): PrecheckItem[] {
     items.push({ id: "port", level: "ok", title: "端口空闲", detail: "可以直接监听" });
   }
 
-  // ---- 9. presets 路径 ----
-  if (facts.presetPathNonAscii) {
+  // ---- 9. 模型预设（现在存在配置里，不再依赖外部 ini）----
+  if (facts.presetModelCount > 0) {
     items.push({
-      id: "preset-path",
+      id: "preset-models",
+      level: "ok",
+      title: `已配置 ${facts.presetModelCount} 个模型的预设`,
+      detail: "预设写在配置文件的 presets 字段里，启动时渲染成临时 ini 传给 llama-server。",
+    });
+  } else if (facts.legacyPresetPath !== "") {
+    items.push({
+      id: "preset-legacy",
       level: "warn",
-      title: "presets.ini 路径含非 ASCII 字符",
-      detail: "实测 llama-server 传非 ASCII 的 --models-preset 路径会直接崩退。",
-      suggestion: "启动器会自动把它拷到临时目录再传，所以能跑；想彻底干净就把 presets.ini 放到纯英文路径下。",
+      title: "配置里还留着 presets.ini 路径，但预设表是空的",
+      detail: `models_preset = ${facts.legacyPresetPath} 已不再直接传给 llama-server。`,
+      suggestion: "在界面左栏点「导入 presets.ini…」把内容并进配置的 presets 字段。",
     });
   }
 
@@ -583,8 +592,8 @@ export async function runPrecheck(input: PrecheckInput): Promise<PrecheckReport>
     modelSizeMiB,
     modelMagicOk,
     portFree,
-    presetPathNonAscii:
-      typeof config.models_preset === "string" && config.models_preset !== "" && hasNonAsciiPath(config.models_preset),
+    presetModelCount: Object.keys(config.presets ?? {}).length,
+    legacyPresetPath: typeof config.models_preset === "string" ? config.models_preset : "",
   };
 
   const items = buildPrecheckItems(facts);

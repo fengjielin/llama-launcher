@@ -17,6 +17,8 @@ import { DEFAULT_CONFIG, discoverLlamaDir, discoverModelLayout, loadConfigFile, 
 import { describeSteps, formatArgv } from "./core/args.ts";
 import { prepareLaunch, probeServer, summarizeCapabilities } from "./core/launcher.ts";
 import { createCapabilities } from "./core/helpProbe.ts";
+import { parsePresetsIni, presetsJsonFromPresetFile } from "./core/presets.ts";
+import type { PresetJson } from "./core/presets.ts";
 import { LlamaServer } from "./core/llamaProcess.ts";
 import { baseUrlOf, fetchHealth, findFreePort, probeTcp } from "./core/health.ts";
 import { classify } from "./core/logLines.ts";
@@ -415,12 +417,23 @@ function cmdInit(flags: Flags): number {
     explicitLlamaDir: flagString(flags, "llama-dir"),
   });
 
+  // presets.ini 现在是**导入来源**：直接把内容转成配置里的 JSON 预设，
+  // 新生成的配置不带 models_preset 路径（那个字段只服务于老配置的迁移）。
+  let presets: PresetJson = {};
+  if (layout.presetPath !== "") {
+    try {
+      presets = presetsJsonFromPresetFile(parsePresetsIni(readFileSync(layout.presetPath, "utf8")));
+    } catch (err) {
+      console.error(`presets.ini 读取失败（跳过预设）：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   const config: LauncherConfig = {
     ...DEFAULT_CONFIG,
     llama_dir: layout.llamaDir ?? "",
     mode: layout.mode,
     models_dir: layout.modelsDirExists ? layout.modelsDirCandidate : "",
-    models_preset: layout.presetPath,
+    presets,
     preload_model: layout.preloadModel,
   };
   saveConfigFile(path, config);
@@ -428,7 +441,9 @@ function cmdInit(flags: Flags): number {
   console.log(`  llama_dir    ：${config.llama_dir || "（未探测到，请手动填）"}`);
   console.log(`  mode         ：${config.mode}`);
   console.log(`  models_dir   ：${config.models_dir || "（未探测到）"}`);
-  console.log(`  models_preset：${config.models_preset || "（未探测到）"}`);
+  console.log(
+    `  presets      ：${Object.keys(presets).length > 0 ? `已从 ${layout.presetPath} 导入 ${Object.keys(presets).length} 个模型的预设` : "（无）"}`,
+  );
   console.log(`  preload_model：${config.preload_model || "（不预加载，首次请求才加载）"}`);
   return 0;
 }

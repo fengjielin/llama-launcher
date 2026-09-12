@@ -84,15 +84,16 @@ test("router 模式：preset 里定义过的键命令行不再传", () => {
       mode: "router",
       main_model: undefined,
       models_dir: "E:\\Code\\llama\\models",
-      models_preset: "E:\\Code\\llama\\presets.ini",
+      presets: { "Qwen3.8-27B-Uncensored-IQ4_XS": { "ctx-size": 16384 } },
       models_max: 1,
     }),
-    { presetKeys: PRESET_KEYS },
+    { presetKeys: PRESET_KEYS, presetArgPath: "C:\\Temp\\llama-launcher-presets.ini" },
   );
   const has = (flag: string): boolean => r.argv.includes(flag);
 
   assert.deepEqual(pair(r.argv, "--models-dir"), ["--models-dir", "E:\\Code\\llama\\models"]);
-  assert.deepEqual(pair(r.argv, "--models-preset"), ["--models-preset", "E:\\Code\\llama\\presets.ini"]);
+  // 传给服务器的是**渲染出来的临时 ini**，不是用户手写的文件（那条路径已经不用了）
+  assert.deepEqual(pair(r.argv, "--models-preset"), ["--models-preset", "C:\\Temp\\llama-launcher-presets.ini"]);
   assert.deepEqual(pair(r.argv, "--models-max"), ["--models-max", "1"]);
 
   // preset 接管 → 命令行不能传（实测命令行优先级更高，会盖掉 preset）
@@ -116,14 +117,14 @@ test("预加载模式：preset 对该模型不生效，ctx/线程/KV/fit/load-mo
       mode: "router",
       main_model: undefined,
       models_dir: "E:\\Code\\llama\\models",
-      models_preset: "E:\\Code\\llama\\presets.ini",
+      presets: { "Qwen3.8-27B-Uncensored-IQ4_XS": { "ctx-size": 16384 } },
       preload_model: "Qwen3.8-27B-Uncensored-IQ4_XS",
     }),
     { presetKeys: PRESET_KEYS, preloadModelFile: preloadFile, preloadCtxFromPreset: 16384 },
   );
 
   assert.deepEqual(pair(r.argv, "--model"), ["--model", preloadFile], "预加载要带上模型绝对路径");
-  assert.deepEqual(pair(r.argv, "-c"), ["-c", "16384"], "ctx 取 presets.ini 里该模型段的值");
+  assert.deepEqual(pair(r.argv, "-c"), ["-c", "16384"], "ctx 取配置里该模型预设的值");
   assert.deepEqual(pair(r.argv, "-t"), ["-t", "6"]);
   for (const flag of ["--cache-type-k", "--cache-type-v", "--fit-target", "--load-mode"]) {
     assert.equal(r.argv.includes(flag), true, `${flag} 在预加载模式下必须 CLI 直传`);
@@ -314,19 +315,10 @@ test("YaRN 未开启时 rope 参数不传", () => {
   assert.deepEqual(pair(on.argv, "--yarn-orig-ctx"), ["--yarn-orig-ctx", "32768"]);
 });
 
-test("presets 路径含非 ASCII 且没预先 stage 时给出告警", () => {
-  const r = build(
-    base({ mode: "router", main_model: undefined, models_dir: "E:\\models", models_preset: "E:\\中文目录\\presets.ini" }),
-    { presetKeys: [] },
-  );
-  assert.ok(r.warnings.some((w) => w.includes("非 ASCII")), r.warnings.join(" | "));
-  // 调用方 stage 过之后用 stagePresetIfNonAscii 的返回值，告警消失
-  const staged = build(
-    base({ mode: "router", main_model: undefined, models_dir: "E:\\models", models_preset: "E:\\中文目录\\presets.ini" }),
-    { presetKeys: [], presetArgPath: "C:\\Temp\\presets.ini" },
-  );
-  assert.equal(staged.argv.includes("E:\\中文目录\\presets.ini"), false);
-  assert.equal(staged.warnings.some((w) => w.includes("非 ASCII")), false);
+test("没有渲染出预设文件时不传 --models-preset（配置里没预设就什么都不传）", () => {
+  const r = build(base({ mode: "router", main_model: undefined, models_dir: "E:\\models" }), { presetKeys: [] });
+  assert.equal(r.argv.includes("--models-preset"), false);
+  assert.equal(r.steps.find((s) => s.key === "models_preset"), undefined, "没有预设就不该有这一行决策");
 });
 
 test("自定义参数原样追加在最后，支持引号", () => {

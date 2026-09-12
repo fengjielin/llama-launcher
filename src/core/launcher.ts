@@ -17,9 +17,8 @@ import { PARAM_SPECS } from "./schema.ts";
 import {
   collectPresetKeys,
   getNumericPresetValue,
-  hasNonAsciiPath,
-  parsePresetsIni,
-  renderPresetForServer,
+  presetFileFromJson,
+  renderPresetFile,
   stagePresetText,
 } from "./presets.ts";
 import type { PresetFile } from "./presets.ts";
@@ -229,37 +228,27 @@ export async function prepareLaunch(config: LauncherConfig, options: PrepareOpti
   const caps = createCapabilities(helpText);
   const capabilities = summarizeCapabilities(caps);
 
-  // ---- 3. presets.ini ----
+  // ---- 3. 模型预设：JSON → 渲染成 llama-server 认的 ini → 临时文件 ----
+  // 预设现在存在配置里（config.presets），ini 只是递给服务器的中间产物：
+  // 路径由我们生成在 %TEMP%（不可能含非 ASCII），也不会写出 [defaults] 那种假模型段。
   let presetFile: PresetFile | null = null;
   let presetArgPath: string | null = null;
-  if (config.mode === "router" && config.models_preset && existsSync(config.models_preset)) {
-    const presetPath = resolve(config.models_preset);
-    const rawText = await readTextFile(presetPath);
-    // 读配置用原始文件（[defaults] 段是启动器自己的约定）
-    presetFile = parsePresetsIni(rawText);
-
-    // 传给 llama-server 的那份要剔掉启动器自用段，否则 [defaults] 会变成一个假模型
-    const { text: serverText, removedSections } = renderPresetForServer(rawText);
-    const tempDir = options.asciiTempDir ?? process.env["TEMP"] ?? process.cwd();
-
-    if (hasNonAsciiPath(presetPath)) {
-      presetArgPath = stagePresetText(serverText, tempDir);
-      warnings.push("presets.ini 路径含非 ASCII 字符，已拷到临时目录再传给 llama-server（否则会直接崩退）");
-    } else if (removedSections.length > 0) {
-      presetArgPath = stagePresetText(serverText, tempDir);
-      warnings.push(
-        `presets.ini 的 [${removedSections.join("], [")}] 段是启动器自己的约定；实测 llama-server 会把它当成一个同名模型` +
-          `（启动日志里 Available models 会多出一行 * defaults），已剔除后再传给 llama-server`,
-      );
-    } else {
-      presetArgPath = presetPath;
-    }
-
-    if (presetFile.defaultModel !== null && !config.preload_model) {
-      warnings.push(`presets.ini 的 [defaults] 里写着 default-model = ${presetFile.defaultModel}，但配置里没启用预加载`);
+  const presetJson = config.presets ?? {};
+  const presetNames = Object.keys(presetJson);
+  if (config.mode === "router" && presetNames.length > 0) {
+    presetFile = presetFileFromJson(presetJson, config.preload_model ?? null);
+    const text = renderPresetFile(presetFile);
+    if (text !== "") {
+      const tempDir = options.asciiTempDir ?? process.env["TEMP"] ?? process.cwd();
+      presetArgPath = stagePresetText(text, tempDir);
     }
   } else if (config.mode === "router" && config.models_preset) {
-    warnings.push(`presets.ini 不存在：${config.models_preset}`);
+    // 老配置：字段还在，但不再直接传给 llama-server。给一条明确的迁移提示，
+    // 免得用户以为"配了却没生效"。
+    warnings.push(
+      `配置里的 models_preset（${config.models_preset}）已不再直接传给 llama-server；` +
+        "请在界面上点「导入 presets.ini…」把内容并进配置的 presets 字段（导入后这个路径只作参考）",
+    );
   }
 
   // ---- 4. 预加载模型 ----

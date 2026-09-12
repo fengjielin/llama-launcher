@@ -545,13 +545,16 @@ Electron 自带的那些文件（`electron.exe` / `*.dll` / `*.pak` / `locales/`
 
 实测产物里的分布：**71 个文件是 1980**（Electron 自带），**51 个是构建时间**（`llama-launcher.exe` 与
 `resources/app/**`）。它不影响运行，也不影响 Electron 的任何校验；只是目录里新旧混杂，
-以及按 mtime 做增量的同步/备份工具会把它当"极旧文件"。想统一就打开这个开关（默认关闭）：
+以及按 mtime 做增量的同步/备份工具会把它当"极旧文件"。想统一时间戳的话：
 
 ```powershell
-$env:LLAMA_PACKAGE_TOUCH='1'
-pnpm package
-#   · 已统一时间戳为 2026/9/12 20:45:36：文件 122 个、目录 8 个
+pnpm package:touch          # ← 推荐：一条命令，等价于「本次打包加 --touch」
+pnpm package                # 不加开关时，脚本末尾会提示这个开关的存在
+#   · 已统一时间戳为 2026/9/12 20:50:14：文件 122 个、目录 8 个
 ```
+
+也可以用环境变量给任意一次打包加开关：`$env:LLAMA_PACKAGE_TOUCH='1'; pnpm package`
+（或直接 `node scripts/package.mjs --win --dir --touch`）。
 
 
 ### 数据放哪儿：便携优先

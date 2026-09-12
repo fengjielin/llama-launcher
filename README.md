@@ -134,11 +134,12 @@ llama-launcher/
 pnpm test          # 等价于 node src/test/run-tests.ts
 ```
 
-159 项测试覆盖：`--help` 解析（真实 fixture）、能力回退、preset 并集/单模型/非 ASCII/BOM、命令行拼装黄金用例、
+170 项测试覆盖：`--help` 解析（真实 fixture）、能力回退、preset 并集/单模型/非 ASCII/BOM、命令行拼装黄金用例、
 预加载覆盖规则、旧版本各回退分支、参数改名、配置迁移、上下文单位识别、行缓冲跨块、日志分类、失败诊断、
 `/health` 的 200/503 语义、端口顺延、GPU 采集解析（真实 `nvidia-smi` 输出）、CPU 差分、指标环形缓冲与序列化、
 档案 CRUD 与文件名安全化、PE 导入表解析（真实 `ggml-cuda.dll`）、环境自检各判定分支、数据落点三种情形、
-llama.cpp 目录的向上回溯探测（含层数上限与环境变量优先）。
+llama.cpp 目录的向上回溯探测（含层数上限与环境变量优先）、模型布局探测（models 目录 / presets.ini / 预加载）、
+关窗决策表（服务在跑 / 没跑 / 已开缩托盘 / 正在退出）、便携版应用目录的解析。
 
 > 为什么不用 `node --test`：那个运行器会为每个测试文件 spawn 子进程并把 stdio 接管道，在受限沙箱里直接
 > `EPERM`。`run-tests.ts` 改成在同一进程里 import 全部测试文件，`node:test` 照样自动执行并设置退出码 ——
@@ -417,18 +418,37 @@ electron-builder 的 `portable.nsi` 为此注入了 `PORTABLE_EXECUTABLE_DIR`（
 
 exe 旁边还没有配置时，启动过程是「**生成 → 重新读一遍**」：
 
-1. 用默认值 + 自动探测到的 `llama.cpp` 目录拼出初始配置，写到磁盘
+1. 用默认值 + **自动探测到的整套布局**拼出初始配置，写到磁盘：
+   `llama.cpp` 目录 → 同级 `models` 目录 → `presets.ini`（据此定 `mode`）→
+   presets 的 `[defaults]` 约定决定是否预加载。探测规则来自 core 的 `discoverModelLayout()`，
+   与 CLI 的 `init` **共用同一份实现**（7 个单测）
 2. **把它当普通配置文件重新读一遍**（`loadConfigFile`），用读回来的结果作为当前配置
 
 第 2 步不是多余的：这样"首次运行的内存状态"与"第二次启动读文件的状态"完全一致，
 不会出现"这次能用、下次启动表现不同"的怪现象。生成的配置就在 exe 旁边，可以直接用编辑器改。
+
+> 早先这里**只探 `llama.cpp` 目录**，于是打包版第一次运行拿到的配置是 `mode: single` + 空的
+> `models_dir`；用户一切到 router 就被告警"没有任何可用模型"。更坑的是输入框里有行灰色的
+> `placeholder`（当时写死成 `E:\Code\llama\models`），看着像默认值、其实不是值 ——
+> 于是"明明有默认值为什么还报警"就成了必踩的坑。现在两条都处理了：
+> 首次运行一次探齐，输入框的灰字也改成不具误导性的提示，
+> 并在**确实探到**候选路径时给一个「填入探测值」按钮（可点，不是灰字）。
 
 界面上这件事是 **ℹ 通知**（不是 ⚠ 警告）：
 
 ```
 ℹ 首次运行：已在 <exeDir>\llama-launcher.json 生成默认配置（可以直接编辑这个文件）
 ℹ 已自动探测到 llama.cpp 目录：E:\Code\llama\llama.cpp
+ℹ 已自动探测到模型目录：E:\Code\llama\models
+ℹ 已自动探测到 presets.ini：E:\Code\llama\一键启动脚本\presets.ini（运行模式已设为 router）
+ℹ 按 presets.ini 的 default-model 约定设置了预加载：Qwen3.8-27B-Uncensored-IQ4_XS
 ```
+
+（后三行是本次实测导出的界面文本，原样抄自 `out/ui-firstrun2.txt`。）
+
+**模型目录必须写进配置**：`--models-dir` 是 llama-server 真正收到的东西，router 模式靠它列出可用模型；
+`presets.ini` 只负责给各模型**覆盖参数**，不能代替它。空着启动，网页左上角一个模型都不会有。
+界面上的判断方法很简单：那行路径是**灰字**就是没设置（只是示例），黑色才是真写进去了。
 
 > 早先的写法在这里报的是「配置文件不存在…已使用默认值」，明明已经生成好了却先报一句像错误的话
 > —— 现在这类中性信息走 `BootstrapPayload.notices`，与真正的 `warnings` 分开渲染。
@@ -436,9 +456,8 @@ exe 旁边还没有配置时，启动过程是「**生成 → 重新读一遍**�
 ### 自动探测 llama.cpp 目录：以应用目录为锚，向上回溯 3 层
 
 `discoverLlamaDir` 的顺序是：环境变量 `LLAMA_SERVER` / `LLAMA_DIR` → 逐个起点目录，**每层检查
-「该层本身」与「该层的 `llama.cpp/`」后向上回溯最多 3 层**。起点列表由主进程传入，
-**第一个是应用目录**（`resolveAppDir()`：便携版是便携 exe 所在目录，其余情况是 exe 所在目录），
-其次才是 cwd。
+「该层本身」与「该层的 `llama.cpp/`」后向上回溯最多 3 层**。起点列表是「应用目录」
+（`resolveAppDir()`：便携版是便携 exe 所在目录，其余情况是 exe 所在目录）→ cwd → 配置里写的目录。
 
 为什么不能只用 cwd：便携版双击启动时 cwd 是 exe 目录（甚至可能落在系统目录），
 而常见布局是「项目目录下并列着 `llama.cpp` 与 `llama-launcher\dist\win-unpacked\`」——

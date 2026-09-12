@@ -15,7 +15,7 @@
 | **M2** | Electron + React + Tailwind 界面：模型选择、schema 驱动表单、启停、日志、决策表 | ✅ 已完成，已实跑「界面点启动 → 日志回流」全流程验证 |
 | **M3** | 资源监控（VRAM/温度/功耗/曲线）、托盘常驻、多套配置档案、开机自启 | ✅ 已完成，已实跑真实 GPU 采集与档案落盘验证（共 109 项单测） |
 | **M4** | 驱动/后端预检、打包分发 | ✅ 预检 ✅；免安装目录与单文件便携版都已实跑验证（打包前规避 `.asar` 占用的入口是 `scripts/package.mjs`） |
-| M5 | HF 镜像下载、多实例管理、`presets.ini` 可视化编辑 | 待开始 |
+| M5 | HF 镜像下载、多实例管理、预设可视化编辑 | 待开始 |
 
 ## 界面长什么样
 
@@ -24,7 +24,7 @@
 │ llama.cpp 启动器  b10488  248 个参数   配置：…\llama-launcher.json  [按钮组] │
 ├──────────────────┬────────────────────────────────────────────────────────┤
 │ [启动服务][打开网页]│ 实际启动命令  llama-server.exe --models-dir … -fa on …  │
-│ 运行模式 (router)  │ ⚠ presets.ini 路径含非 ASCII…（自动拷到临时目录）        │
+│ 运行模式 (router)  │ ℹ 已为 5 个模型定义预设（在配置的 presets 里）              │
 │ 模型（目录/预设/预加载/视觉/草稿）│ ┌ 参数 49 │ 决策表 52 │ 日志 24 ┐        │
 │ llama.cpp（构建目录）│ │ 分组折叠的参数表单 / 决策表 / 实时日志（按等级着色） │
 ├──────────────────┴────────────────────────────────────────────────────────┤
@@ -33,7 +33,7 @@
 ```
 
 参数表单由 `schema.ts` **自动生成**，并按运行时 `--help` 探测结果显示三种徽标：
-「preset 接管」（命令行不会再传，避免盖掉 presets.ini）、「已废弃」（如 `--mlock`）、「本版本不支持」（置灰）。
+「preset 接管」（命令行不会再传，避免盖掉配置里的预设）、「已废弃」（如 `--mlock`）、「本版本不支持」（置灰）。
 
 ## 快速开始
 
@@ -50,7 +50,7 @@ pnpm typecheck           # tsc --noEmit
 ```powershell
 cd E:\Code\llama\llama-launcher
 
-# 1) 生成配置（自动探测 llama.cpp 目录、models 目录、presets.ini、预加载模型）
+# 1) 生成配置（自动探测 llama.cpp 目录、models 目录、presets.ini、预加载模型；presets.ini 的内容会转成配置里的 presets）
 node src/cli.ts init --config llama-launcher.json
 
 # 2) 只打印最终命令行 + 每个参数的决策原因（不启动任何进程，对拍用）
@@ -74,7 +74,7 @@ llama-launcher/
 │  ├─ schema.ts        ★ 声明式参数表：候选参数名 / preset 键 / 分组 / 说明
 │  ├─ helpProbe.ts     ★ `--help` 解析 + 能力视图（参数改名的兜底机制）
 │  ├─ args.ts          ★ 命令行拼装（纯函数）+ 参数决策表
-│  ├─ presets.ts       presets.ini 解析（含非 ASCII 路径迁移）
+│  ├─ presets.ts       模型预设：JSON 形态 ⇄ 渲染成 llama-server 的 ini（含旧 ini 的导入）
 │  ├─ config.ts        配置归一化 / llama.cpp 目录探测
 │  ├─ launcher.ts      编排层：配置 → 探测 → presets → 命令行
 │  ├─ llamaProcess.ts  进程状态机 / 日志泵 / taskkill 兜底
@@ -102,13 +102,16 @@ llama-launcher/
    兼容回退、按规则跳过、未配置。GUI 直接渲染这张表，用户就不会再问"我明明配了为什么没生效"。
 
 4. **preset 与命令行的优先级如实处理**
-   实测命令行优先级高于 presets.ini，所以 preset 里定义过的键命令行**不能再传**，否则会盖掉 preset。
+   实测命令行优先级高于 preset，所以 preset 里定义过的键命令行**不能再传**，否则会盖掉 preset。
    例外：预加载的模型不吃 preset（实测 ctx 被忽略、fit 会把 ctx 压到 4096），此时必须反过来由命令行直传 ——
    这条规则用 `preloadBypass` 标在具体参数上，与既有 PS1 脚本逐项对齐。
 
-5. **`--models-preset` 的路径必须是 ASCII**
-   中文路径会让 llama-server 刷两行日志后直接崩退。`stagePresetIfNonAscii()` 会先拷到临时目录再传，
-   并在决策表里说明。
+5. **模型预设写成配置里的 JSON，ini 降级为"给服务器的中间产物"**
+   预设直接存在配置的 `presets` 字段（模型名 → 参数表，键名沿用 llama.cpp 自己的
+   `ctx-size` / `cache-type-k` / `fit-target` / `load-mode` / `threads`…），启动时渲染成临时 ini 再传路径。
+   这么改顺带消掉了 ini 时代两个必踩的坑：中文路径会让 llama-server 崩退（每次都得转存到 `%TEMP%`）、
+   `[defaults]` 段会被服务器当成一个假模型。现在那份 ini 是我们生成的：路径在 `%TEMP%`、段里只有真模型。
+   详见下文「模型预设：写在配置里」。
 
 6. **行缓冲必须自己做**（`LineSplitter`）
    `child_process` 的 stdout 按块给，块边界会把一行切成两半。不缓冲，日志面板里会随机出现半行。
@@ -174,8 +177,9 @@ llama.cpp 目录的向上回溯探测（含层数上限与环境变量优先）�
    修复后： Loaded 5 custom model presets / Available models (5)   ← [defaults] 已被剔除
    ```
 
-   后果是网页下拉框里多一个假模型、并白占一个 `--models-max` 槽位。现在启动器读配置仍从原文件读
-   （`[defaults]` 是启动器自己的约定），但传给 llama-server 的那份会把这些段剔掉，并在提醒里说明。
+   后果是网页下拉框里多一个假模型、并白占一个 `--models-max` 槽位。
+   **这条现在已经从根上消失了**：预设以配置里的 JSON 为准，递给服务器的 ini 是启动器生成的，
+   只会写出真实模型段（见上文「模型预设：写在配置里」）。
 
 ## Windows 编码踩坑（自己排查时别被骗）
 
@@ -217,7 +221,56 @@ pnpm build; node_modules\.bin\electron .
 | 资产 | 本项目如何使用 |
 | --- | --- |
 | `一键启动脚本\llama-oneclick.ps1` | 作为**行为基准与参数知识来源**：显存档位、`--help` 探测、preset 占位规则、各版本回退、踩坑注释全部继承 |
-| `一键启动脚本\presets.ini` | 直接读取（fixtures 里有一份副本用于测试）；`[defaults]` 的 `; default-model =` 约定继续生效 |
+| `一键启动脚本\presets.ini` | **一次性导入来源**：`init` 与界面「导入 presets.ini…」把它的模型段转成配置里的 `presets`（fixtures 里有一份副本用于测试）。之后以配置为准，不再依赖这个文件 |
+
+## 模型预设：写在配置里（`presets`）
+
+预设不再是外部 ini，而是配置 JSON 的一个字段 —— **模型名 → 参数表**，键名沿用 llama.cpp
+`--models-preset` 自己的键（不发明新方言，llama.cpp 将来加键也不用改代码）：
+
+```jsonc
+{
+  "mode": "router",
+  "models_dir": "E:\\Code\\llama\\models",
+  "preload_model": "Qwen3.8-27B-Uncensored-IQ4_XS",
+  "presets": {
+    "Qwen3.8-27B-Uncensored-IQ4_XS": {
+      "ctx-size": 16384, "cache-type-k": "q4_0", "cache-type-v": "q4_0",
+      "fit-target": 1024, "load-mode": "mmap+mlock", "threads": 6
+    },
+    "qwen2.5-7b-instruct-q4_k_m": {
+      "ctx-size": 32768, "cache-type-k": "q8_0", "cache-type-v": "q8_0",
+      "fit-target": 1024, "load-mode": "mmap+mlock", "threads": 6
+    }
+  }
+}
+```
+
+- 段名（对象键）= 模型名（GGUF 文件名去掉 `.gguf`），与 llama-server 的 `Available models` 一致。
+- 值只支持字符串 / 数字 / 布尔，**写什么就传什么**（`ctx-size` 也可以写成 `"16384"`）。
+- 启动时由 `renderPresetFile()` 渲染成 llama-server 认的 ini 写到 `%TEMP%\llama-launcher-presets.ini`，
+  再把那个路径交给 `--models-preset`。所以**再也不会有"中文路径把服务器搞崩退"和
+  `[defaults]` 被当成假模型**这两件事（生成的那份 ini 里只有真模型段）。
+- 预设里定义过的键，命令行不再重复传（preset 与命令行的优先级见上文「关键设计决策」第 4 条）。
+- 界面左栏显示"已为 N 个模型定义预设"+ 清单，不想手写 JSON 就点「导入 presets.ini…」把旧文件转进来
+  （同名模型不覆盖，导入结果会写盘并给出通知）。
+
+老配置（只有 `models_preset` 路径、没有 `presets`）**打开时会自动导入**：读那个 ini、转成 JSON 预设留在内存里，
+并给出 ℹ 通知「点『保存』写入文件」。导入是一次性的补充动作，不会覆盖你已经调过的同名模型。
+
+**实测**（真实 llama-server，b10488）：把上面那份配置跑起来，服务器日志是
+
+```
+load_models: Loaded 5 custom model presets from C:\Users\feng\AppData\Local\Temp\llama-launcher-presets.ini
+operator(): Available models (5) (*: custom preset)
+operator():   * Qwen3.8-27B-Uncensored-IQ2_M
+operator():   * Qwen3.8-27B-Uncensored-IQ4_XS
+operator():   * meta-llama.Meta-Llama-3-8B-Instruct.Q4_K_M
+operator():   * qwen2.5-7b-instruct-q4_k_m
+operator():   * qwen2.5-7b-instruct-q5_k_m
+```
+
+5 个模型全带 `*`（都吃到了自定义 preset），而且**没有**多出来的 `* defaults` 假模型。
 | `llamaServer启动器\反编译输出\` | 仅作**功能需求参考**（v1.9 的配置字段、UI 分区、GPU 监控方式）。版权归原作者（bilibili:hsxbxq），**不复制其代码、样式与文案、不二次分发** |
 | `llamaServer启动器\llama_launcher_config.json` | 仅作**字段命名参考**（哪些参数值得建模、默认值取多少）。启动器**不提供**导入它的功能，配置由 `init` / 界面生成 |
 
@@ -229,7 +282,7 @@ pnpm build; node_modules\.bin\electron .
    （16K 档在 PS1 里写的是 32768，64 不可能是 token 数）。这条只**识别 + 明确告警**，不静默改数。
    若你原本就想要 64 tokens，把 `context` 显式写成 `64` 并加 `"contextUnit": "tokens"`。
 3. **`presets.ini` 里那行 `; default-model = Qwen3.8-27B-Uncensored-IQ4_XS` 是注释，但 PS1 的读取逻辑仍然认它** ——
-   也就是说你现在的脚本**每次启动都会预加载 27B 模型**。`init` 会把这个行为如实写进配置的 `preload_model`。
+   也就是说你原来的脚本**每次启动都会预加载 27B 模型**。`init`/导入时会把这条约定读出来写进配置的 `preload_model`。
    不想要预加载就把 `preload_model` 置空（GUI 里会是个开关）。
 4. **驱动与 dflash**：本机驱动 566.36，而 dflash/dspark/MTP 需要的开发版是 CUDA 13.3 构建
    （CUDA 13.x 需要 R580 以上驱动），现在跑不起来。M4 的「驱动/后端预检」会把这类问题在点启动前就报出来。
@@ -419,9 +472,9 @@ electron-builder 的 `portable.nsi` 为此注入了 `PORTABLE_EXECUTABLE_DIR`（
 exe 旁边还没有配置时，启动过程是「**生成 → 重新读一遍**」：
 
 1. 用默认值 + **自动探测到的整套布局**拼出初始配置，写到磁盘：
-   `llama.cpp` 目录 → 同级 `models` 目录 → `presets.ini`（据此定 `mode`）→
-   presets 的 `[defaults]` 约定决定是否预加载。探测规则来自 core 的 `discoverModelLayout()`，
-   与 CLI 的 `init` **共用同一份实现**（7 个单测）
+   `llama.cpp` 目录 → 同级 `models` 目录 → `presets.ini`（据此定 `mode`，
+   **并把它的模型段转成配置里的 `presets`**）→ presets 的 `[defaults]` 约定决定是否预加载。
+   探测规则来自 core 的 `discoverModelLayout()`，与 CLI 的 `init` **共用同一份实现**（7 个单测）
 2. **把它当普通配置文件重新读一遍**（`loadConfigFile`），用读回来的结果作为当前配置
 
 第 2 步不是多余的：这样"首次运行的内存状态"与"第二次启动读文件的状态"完全一致，
@@ -440,14 +493,16 @@ exe 旁边还没有配置时，启动过程是「**生成 → 重新读一遍**�
 ℹ 首次运行：已在 <exeDir>\llama-launcher.json 生成默认配置（可以直接编辑这个文件）
 ℹ 已自动探测到 llama.cpp 目录：E:\Code\llama\llama.cpp
 ℹ 已自动探测到模型目录：E:\Code\llama\models
-ℹ 已自动探测到 presets.ini：E:\Code\llama\一键启动脚本\presets.ini（运行模式已设为 router）
+ℹ 已自动探测到 presets.ini：E:\Code\llama\一键启动脚本\presets.ini（运行模式已设为 router），其中 5 个模型的预设已导入配置的 presets 字段
 ℹ 按 presets.ini 的 default-model 约定设置了预加载：Qwen3.8-27B-Uncensored-IQ4_XS
 ```
 
-（后三行是本次实测导出的界面文本，原样抄自 `out/ui-firstrun2.txt`。）
+（后三行是本次实测导出的界面文本，原样抄自 `out/ui-firstrun-json.txt`。实测生成的配置里
+`mode: router`、`models_dir` 有值、`presets` 里有 5 个模型、`models_preset` 为空 —— 也就是说
+**新配置不再依赖那个 ini 文件**。）
 
 **模型目录必须写进配置**：`--models-dir` 是 llama-server 真正收到的东西，router 模式靠它列出可用模型；
-`presets.ini` 只负责给各模型**覆盖参数**，不能代替它。空着启动，网页左上角一个模型都不会有。
+配置里的预设（`presets`）只负责给各模型**覆盖参数**，不能代替它。空着启动，网页左上角一个模型都不会有。
 界面上的判断方法很简单：那行路径是**灰字**就是没设置（只是示例），黑色才是真写进去了。
 
 > 早先的写法在这里报的是「配置文件不存在…已使用默认值」，明明已经生成好了却先报一句像错误的话
@@ -508,7 +563,7 @@ exe 旁边还没有配置时，启动过程是「**生成 → 重新读一遍**�
 - ~~**单文件安装包**~~ ✅ 已完成：`pnpm package:portable` 出便携版单 exe（`nsis` 安装程序同理，
   只是本机没实跑安装流程）
 - **HF 镜像下载**：接 `hf-mirror`，带进度与断点续传；以及 `llama-quantize` / `gguf-split` 的图形化
-- **`presets.ini` 可视化编辑**：在界面里增删改模型段，不必手写 ini
+- **预设可视化编辑**：格式已经是配置里的 JSON（见「模型预设：写在配置里」），下一步是在界面里增删改模型段，不必手写 JSON
 - **多实例管理**：同时跑多个 llama-server，各自分配端口与显卡
 
 数据源与纯逻辑会继续留在 core 侧（可单测），界面只做展示。

@@ -52,6 +52,38 @@ function pair(argv: readonly string[], flag: string): string[] {
 // ---------------------------------------------------------------------------
 const PRESET_KEYS = ["ctx-size", "cache-type-k", "cache-type-v", "fit-target", "load-mode", "threads", "temperature"];
 
+test("预加载模式：preset 里定义了 n-predict 也必须由命令行传 -n（预加载不吃 preset）", () => {
+  const preloadFile = "E:\\Code\\llama\\models\\Qwen3.8-27B-Uncensored-IQ4_XS.gguf";
+  const common = { mode: "router" as const, main_model: undefined, models_dir: "E:\\Code\\llama\\models" };
+
+  // 预设里有 n-predict：按模型的值传（这里是 8192），而不是静默不传
+  const presetKeys = [...PRESET_KEYS, "n-predict"];
+  const fromPreset = build(base({ ...common, preload_model: "A" }), {
+    presetKeys,
+    preloadModelFile: preloadFile,
+    preloadMaxPredictFromPreset: 8192,
+  });
+  assert.deepEqual(pair(fromPreset.argv, "-n"), ["-n", "8192"], "预加载模型的 -n 必须直传，且取该模型的推荐值");
+  // 走的是"预加载直传"这条理由（与 ctx 一致），而不是普通的命令行直传 / preset 接管
+  assert.equal(fromPreset.steps.find((s) => s.key === "max_predict")?.reason, "preload-override");
+  assert.ok(
+    fromPreset.steps.find((s) => s.key === "max_predict")?.note?.includes("n-predict = 8192"),
+    fromPreset.steps.find((s) => s.key === "max_predict")?.note,
+  );
+
+  // 预设里没有 n-predict：回落到配置级 max_predict
+  const fromConfig = build(base({ ...common, preload_model: "A", max_predict: 4096 }), {
+    presetKeys,
+    preloadModelFile: preloadFile,
+  });
+  assert.deepEqual(pair(fromConfig.argv, "-n"), ["-n", "4096"]);
+
+  // 非预加载：仍然交给 preset 接管（命令行不传），由服务器按模型读 n-predict
+  const notPreload = build(base({ ...common, main_model: undefined }), { presetKeys });
+  assert.equal(notPreload.argv.includes("-n"), false);
+  assert.equal(notPreload.steps.find((s) => s.key === "max_predict")?.reason, "preset-owned");
+});
+
 test("single 模式：没有主模型但有 preload_model 兜底时，-m 用兜底路径", () => {
   const r = build(
     base({ mode: "single", main_model: undefined, models_dir: "E:\\Code\\llama\\models", preload_model: "Qwen3" }),

@@ -287,6 +287,13 @@ export interface BuildInput {
   /** 预加载模型在配置预设里的 ctx-size（实测预加载时 preset 不生效，需 CLI 直传） */
   preloadCtxFromPreset?: number | null;
   /**
+   * 预加载模型在配置预设里的 `n-predict`（= 单次生成上限）。
+   *
+   * 与 `preloadCtxFromPreset` 同一个原因：预加载的模型不吃 preset，`-n` 必须由命令行直传；
+   * 取该模型自己的推荐值，比用配置级的 `max_predict` 更贴合"按模型给默认值"的用法。
+   */
+  preloadMaxPredictFromPreset?: number | null;
+  /**
    * 真正要传给 `--models-preset` 的路径。
    *
    * 预设存在配置里（JSON），调用方负责把它渲染成 ini 写到临时文件，再把那个路径放这里 ——

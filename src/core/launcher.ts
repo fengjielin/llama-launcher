@@ -254,12 +254,16 @@ export async function prepareLaunch(config: LauncherConfig, options: PrepareOpti
   // ---- 4. 预加载模型 ----
   let preloadModelFile: string | null = null;
   let preloadCtxFromPreset: number | null = null;
+  let preloadMaxPredictFromPreset: number | null = null;
   if (config.mode === "router" && config.preload_model && config.models_dir) {
     const candidate = join(config.models_dir, `${config.preload_model}.gguf`);
     if (existsSync(candidate)) {
       preloadModelFile = candidate;
       if (presetFile !== null) {
+        // 预加载的模型不吃 preset（实测 ctx 被忽略、fit 会把 ctx 压小），
+        // 所以这两项要从它的预设里读出来、改由命令行直传
         preloadCtxFromPreset = getNumericPresetValue(presetFile, config.preload_model, "ctx-size");
+        preloadMaxPredictFromPreset = getNumericPresetValue(presetFile, config.preload_model, "n-predict");
       }
     } else {
       warnings.push(`预加载模型不存在：${candidate}（模型 ID = GGUF 文件名去掉 .gguf），已改为按需加载`);
@@ -288,6 +292,7 @@ export async function prepareLaunch(config: LauncherConfig, options: PrepareOpti
     presetKeys: presetFile !== null ? collectPresetKeys(presetFile) : [],
     preloadModelFile,
     preloadCtxFromPreset,
+    preloadMaxPredictFromPreset,
     presetArgPath,
     mainModelFile,
     cpuOnly: options.cpuOnly ?? false,

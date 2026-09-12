@@ -422,13 +422,21 @@ export function buildArgs(input: BuildInput): BuildResult {
   });
 
   // =========================================================== 7. 生成上限 / 批处理
+  // 与 ctx 同理：预加载的模型不吃 preset，所以 -n 必须由命令行直传；
+  // 传的值优先取该模型预设里的 n-predict（按模型的推荐值），没有才回落到配置级 max_predict。
+  const nPredictFromPreset = input.preloadMaxPredictFromPreset ?? null;
+  const nPredictValue = isPreload && nPredictFromPreset !== null ? nPredictFromPreset : config.max_predict;
   emit({
     key: "max_predict",
     label: "单次生成上限",
     candidates: ["-n", "--predict", "--n-predict"],
     presetKey: "n-predict",
-    value: config.max_predict,
-    note: "llama-server 默认 -1（无限），模型复读时会吃满上下文；网页端 max tokens 会覆盖它，两边都要设",
+    preloadBypass: true,
+    value: nPredictValue,
+    note:
+      isPreload && nPredictFromPreset !== null
+        ? `预加载模型不吃 preset，-n 由命令行直传（取自配置预设里的 n-predict = ${nPredictFromPreset}）`
+        : "llama-server 默认 -1（无限），模型复读时会吃满上下文；网页端 max tokens 会覆盖它，两边都要设",
   });
   emit({ key: "batch_size", label: "逻辑批大小", candidates: ["-b", "--batch-size"], value: config.batch_size });
   emit({ key: "ubatch_size", label: "物理批大小", candidates: ["-ub", "--ubatch-size"], value: config.ubatch_size });

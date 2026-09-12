@@ -14,7 +14,8 @@
 | **M1** | core：schema / 探测 / 拼装 / presets / 配置 / 进程 / 日志 / 健康检查 / CLI / 单测 | ✅ 已实跑 llama-server 验证 |
 | **M2** | Electron + React + Tailwind 界面：模型选择、schema 驱动表单、启停、日志、决策表 | ✅ 已完成，已实跑「界面点启动 → 日志回流」全流程验证 |
 | **M3** | 资源监控（VRAM/温度/功耗/曲线）、托盘常驻、多套配置档案、开机自启 | ✅ 已完成，已实跑真实 GPU 采集与档案落盘验证（共 109 项单测） |
-| M4 | 打包分发、驱动/后端预检、HF 下载、多实例 | 待开始 |
+| **M4** | 驱动/后端预检、打包分发 | 🚧 预检 ✅、免安装打包 ✅（已实跑打包产物）；单文件安装包受阻于 electron-builder 上游 bug，详见下文 |
+| M5 | HF 镜像下载、多实例管理、`presets.ini` 可视化编辑 | 待开始 |
 
 ## 界面长什么样
 
@@ -135,9 +136,10 @@ llama-launcher/
 pnpm test          # 等价于 node src/test/run-tests.ts
 ```
 
-109 项测试覆盖：`--help` 解析（真实 fixture）、能力回退、preset 并集/单模型/非 ASCII/BOM、命令行拼装黄金用例、
+141 项测试覆盖：`--help` 解析（真实 fixture）、能力回退、preset 并集/单模型/非 ASCII/BOM、命令行拼装黄金用例、
 预加载覆盖规则、旧版本各回退分支、参数改名、配置迁移、上下文单位识别、行缓冲跨块、日志分类、失败诊断、
-`/health` 的 200/503 语义、端口顺延。
+`/health` 的 200/503 语义、端口顺延、GPU 采集解析（真实 `nvidia-smi` 输出）、CPU 差分、指标环形缓冲与序列化、
+档案 CRUD 与文件名安全化、PE 导入表解析（真实 `ggml-cuda.dll`）、环境自检的各条判定分支。
 
 > 为什么不用 `node --test`：那个运行器会为每个测试文件 spawn 子进程并把 stdio 接管道，在受限沙箱里直接
 > `EPERM`。`run-tests.ts` 改成在同一进程里 import 全部测试文件，`node:test` 照样自动执行并设置退出码 ——
@@ -283,13 +285,74 @@ Windows 与 macOS 支持；Linux 需要安装 `.desktop` 项，暂未实现（�
 > 想验证的话点一下开关，然后用 `Get-CimInstance Win32_StartupCommand` 或任务管理器的
 > 「启动」页确认，关掉后会立刻移除。
 
-## 下一步（M4）
+## M4：环境自检 与 打包分发
 
-- **打包分发**：electron-builder 出绿色版/安装包，把 `out/` 与运行时一起打进去
-- **驱动 / 后端预检**：点启动前就检查「驱动版本 ↔ CUDA 构建版本 ↔ 显卡算力」是否匹配
-  （本机驱动 566.36 跑不了 CUDA 13.3 的开发版构建，这类问题现在只能等 llama-server 报错）
-- **`presets.ini` 可视化编辑**：在界面里增删改模型段，不必手写 ini
+### 环境自检（「自检」标签页）
+
+回答的是「这份 llama.cpp 构建 + 这台机器配不配得上」，**全部判据都在本地，不联网**：
+
+| 检查项 | 判据 |
+| --- | --- |
+| 这份构建需要哪个 CUDA | `ggml-cuda.dll` 的 **PE 导入表**：CUDA 12 构建链 `cudart64_12.dll`，CUDA 13 构建链 `..._13.dll` |
+| 驱动能不能跑它 | `nvidia-smi` 头部的 `CUDA Version:`（驱动支持的 CUDA 上限） |
+| CUDA 运行时在不在 | 按 exe 同目录 → PATH → System32 的顺序解析导入的那些 DLL |
+| 后端构成 | 同目录下的 `ggml-*.dll`（cpu / cuda / vulkan / rpc …） |
+| 模型能不能装下 | 模型文件体积 vs 显存总量（>85% 就警告：KV cache 放不下） |
+| 模型文件是否完好 | 开头 4 字节是不是 `GGUF` 魔数（能抓出没下完的文件） |
+| 端口 | TCP 探测 |
+
+兼容规则是 CUDA 的官方规则：**同一大版本内向下兼容**（支持 12.7 的驱动能跑任何 12.x 构建），
+跨大版本则要求驱动不低于构建所需的大版本。所以本机「驱动 566.36（支持 CUDA 12.7）+ b10488 CUDA 12.4 构建」
+判定为**匹配**；只有当你换上 CUDA 13.x 的构建时才会明确报「驱动太旧」，并给出两条出路
+（升级驱动到 580+，或换回 CUDA 12 的构建）——**不会推荐你去用开发版**。
+
+几个刻意的设计：
+- **只提示、不拦截**：自检误判的代价（把用户挡住）比漏判（多一条警告）大得多，启动不会被它阻断
+- **结果按配置缓存**（exe / 模型 / 端口 / presets 路径为键），服务启停后会作废重算（端口占用状态变了）
+- 自检本身**永不抛异常**：任何一步失败都退化成"该项信息缺失"，其余检查照常跑
+
+### 打包分发
+
+```powershell
+pnpm package            # → dist/win-unpacked/ ：免安装目录，双击 llama-launcher.exe 即用
+pnpm package:portable   # → 单文件便携版（当前受阻，见下）
+```
+
+产物里**只有启动器自己**（`out/` 三份产物 + `package.json`）：llama.cpp 与模型都留在外面 ——
+它们是几十 GB 的东西，而且你本来就会换构建版本，打进去反而没法换。启动器启动时按配置去找
+`llama-server.exe`。
+
+便携版的配置查找顺序（`src/main/index.ts` 的 `defaultConfigPath`）：
+开发时用项目根目录 → **打包后优先用 exe 同目录的 `llama-launcher.json`**（便携版惯例：整个文件夹拷走就能用）
+→ 都没有才用 `%APPDATA%\llama-launcher\`。
+
+**已实测**：打包出的 `llama-launcher.exe` 能独立运行，自己探测到 `E:\Code\llama\llama.cpp`，
+自检面板正常显示「构建需要 CUDA 12 / 驱动支持 12.7 / RTX 4060 Ti」。
+
+#### 打包时踩的三个坑（都写进 `electron-builder.yml` 注释了）
+
+1. **electron-builder 26.x 有个上游 bug**：它的 `resolveCacheMode` 读 `@electron/get` 的
+   `ElectronDownloadCacheMode`，但依赖范围写的是 `^3.0.0`，而 **3.0.0 并不导出该符号**（3.1.0 才导出），
+   于是报 `Cannot read properties of undefined (reading 'ReadWrite')`。
+   绕法：`electronDist: node_modules/electron/dist` —— 直接复用装好的 Electron 发行目录，不走那条下载路径。
+2. **同一个 bug 也卡住安装包**：`portable` / `nsis` 目标要下载 7za、NSIS 工具链，走的还是那条坏路径，
+   因此**单文件安装包目前打不出来**（`--dir` 免安装目录不受影响）。
+   彻底的修法是把 `@electron/get` 提到 3.1.0 并让 `app-builder-lib` 用上它 ——
+   已在 `package.json` 里装了 `@electron/get@3.1.0` 并加了 `pnpm.overrides`，但 pnpm 没把它应用到
+   `app-builder-lib` 的那份嵌套副本上，还需要再想办法（`pnpm patch` 或清理 lockfile 重装）。
+3. **图标给现成的 `.ico`**，不要让 electron-builder 从 PNG 转换（它的转换要调 app-builder 的二进制，本机报错）。
+   `build/icon.ico` 是手写的：ICO 头 + 内嵌一张 256×256 PNG（Windows Vista+ 原生支持这种形式）。
+
+> 环境相关提醒：如果在**受管沙箱**里跑打包，输出目录必须放在工作区之外
+> （`--config.directories.output=<工作区外的路径>`），否则工作区的文件观察层会持有刚生成的文件，
+> 让 electron-builder 的 unlink 报 `EBUSY`。在你自己的终端里没这个问题。
+
+## 下一步（M5）
+
+- **单文件安装包**：把上面第 2 条坑解决掉（让 `app-builder-lib` 用上 `@electron/get@3.1.0`），
+  然后 `pnpm package:portable` 就能出便携版单 exe、`nsis` 目标能出安装程序
 - **HF 镜像下载**：接 `hf-mirror`，带进度与断点续传；以及 `llama-quantize` / `gguf-split` 的图形化
+- **`presets.ini` 可视化编辑**：在界面里增删改模型段，不必手写 ini
 - **多实例管理**：同时跑多个 llama-server，各自分配端口与显卡
 
 数据源与纯逻辑会继续留在 core 侧（可单测），界面只做展示。

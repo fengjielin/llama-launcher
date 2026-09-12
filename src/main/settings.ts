@@ -16,12 +16,16 @@ export const SETTINGS_FILE = "llama-launcher-settings.json";
 /**
  * 默认设置。
  *
- * `minimizeToTray` 默认 **true**：这个程序的一半价值是"后台常驻并把服务跑着"，
- * 关掉窗口就停服会让人措手不及；托盘菜单里可以改，界面底部也有提示。
+ * `minimizeToTray` 默认 **false**：点 ✕ 就该关掉窗口，这是大多数人的直觉
+ * （早先默认 true，结果是"明明关了，任务管理器里四个进程还在"，很吓人）。
+ * 但直接退出会把正在跑的 llama-server 一起带走，所以关窗路径上有两道保护：
+ *   - 服务在跑时先弹一次确认（退出并停止服务 / 缩到托盘继续跑 / 取消），见 `closePolicy.ts`
+ *   - 真要退出时 `before-quit` 会先 `stop()`（含 `taskkill /T /F` 兜底），不留占显存的孤儿进程
+ * 想让它常驻后台（关窗不断服），打开这个开关即可 —— 那时 ✕ 只隐藏窗口，不再询问。
  */
 export const DEFAULT_SETTINGS: AppSettings = {
   openAtLogin: false,
-  minimizeToTray: true,
+  minimizeToTray: false,
 };
 
 /**

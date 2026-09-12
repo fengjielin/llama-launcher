@@ -27,6 +27,7 @@ import type {
   ProfilesPayload,
 } from "../shared/ipc.ts";
 import { LauncherSession } from "./session.ts";
+import { decideCloseAction } from "./closePolicy.ts";
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, settingsPathFor } from "./settings.ts";
 import { chooseDataLayout, resolveAppDir } from "./paths.ts";
 import { TrayController } from "./tray.ts";
@@ -292,12 +293,19 @@ async function createWindow(): Promise<void> {
     updateTray();
   });
   win.on("close", (event) => {
-    // 关闭窗口 ≠ 退出：这是台"服务启动器"，服务该继续跑。
-    // 真正退出走托盘菜单的「退出」（会先停服再退）。
-    if (settings.minimizeToTray && !quitting) {
-      event.preventDefault();
+    // 关窗要不要拦下来，交给纯函数判（每种组合都有单测，见 closePolicy.ts）
+    const action = decideCloseAction({
+      minimizeToTray: settings.minimizeToTray,
+      quitting,
+      serverActive: session?.servingSummary().active === true,
+    });
+    if (action === "close") return; // 放行：window-all-closed → app.quit()，退出前会先停服
+    event.preventDefault();
+    if (action === "hide-to-tray") {
       win?.hide();
+      return;
     }
+    void askBeforeQuittingWhileServing();
   });
 
   // ⚠ 监听必须挂在 load 之前：await loadFile() 是在 did-finish-load 之后才 resolve 的，
@@ -504,6 +512,52 @@ function registerIpc(): void {
  */
 function shouldKeepRunningInTray(): boolean {
   return settings.minimizeToTray && !quitting;
+}
+
+/** 确认框是否已经弹出来了（连点 ✕ 不该叠出多个框） */
+let closePromptOpen = false;
+
+/**
+ * 点 ✕ 时 llama-server 还在跑：问一次该"退出并停止"还是"缩到托盘继续跑"。
+ *
+ * 为什么需要这一步：默认不再缩托盘（那样用户以为关了程序、进程却还在），
+ * 但直接退出会卸载正在跑的模型。所以只在这一个时刻打断用户，并把两条出路都说清楚。
+ *
+ * 三个按钮：
+ * - **退出并停止服务**：走 `app.quit()` → `before-quit` 里先 `stop()`（含 taskkill 兜底）再退
+ * - **缩到托盘继续跑**：只隐藏窗口，模型留在显存里
+ * - **取消**：什么都不做，窗口继续开着
+ *
+ * @returns 用户做出选择（或框已经开着）后 resolve
+ */
+async function askBeforeQuittingWhileServing(): Promise<void> {
+  if (closePromptOpen) return;
+  closePromptOpen = true;
+  try {
+    const summary = session?.servingSummary() ?? { active: false, state: "idle" as const, pid: null };
+    const detail =
+      `当前状态：${summary.state}${summary.pid === null ? "" : `（PID ${summary.pid}）`}\n`
+      + "选择「缩到托盘继续跑」只是隐藏窗口，模型不会被卸载；\n"
+      + "之后想真正退出，用托盘图标的右键菜单 →「退出」。";
+    const options = {
+      type: "question" as const,
+      buttons: ["退出并停止服务", "缩到托盘继续跑", "取消"],
+      defaultId: 0,
+      cancelId: 2,
+      title: "llama-server 正在运行",
+      message: "关闭窗口会退出启动器，并先停掉 llama-server。",
+      detail,
+    };
+    const choice = win === null
+      ? await dialog.showMessageBox(options)
+      : await dialog.showMessageBox(win, options);
+
+    if (choice.response === 0) app.quit();
+    else if (choice.response === 1) win?.hide();
+    // response === 2（取消）：什么都不做
+  } finally {
+    closePromptOpen = false;
+  }
 }
 
 app.whenReady().then(async () => {

@@ -13,6 +13,7 @@ import { fetchHealth, findFreePort, probeTcp } from "../core/health.ts";
 import { createCapabilities } from "../core/helpProbe.ts";
 import { prepareLaunch, probeServer } from "../core/launcher.ts";
 import { LlamaServer } from "../core/llamaProcess.ts";
+import type { ServerState } from "../core/llamaProcess.ts";
 import { MetricsSampler } from "../core/metrics.ts";
 import { precheckWarnings, runPrecheck } from "../core/precheck.ts";
 import type { PrecheckReport } from "../core/precheck.ts";
@@ -506,6 +507,26 @@ export class LauncherSession {
       baseUrl: this.currentBaseUrl(),
       health: running ? await this.health() : null,
       lastCommand: this.lastPreview?.command ?? null,
+    };
+  }
+
+  /**
+   * 同步汇报"服务是否还活着"。
+   *
+   * 专门给关窗路径用：那里需要**立刻**知道要不要提示用户，而 `status()` 会去请求 `/health`
+   * （服务卡住时可能等好几秒，关窗口不该等网络）。
+   *
+   * `starting` / `running` / `stopping` 都算"活着"：启动中直接退会把刚加载的模型扔掉，
+   * 停止中再插一次退出也可能打断清理。
+   *
+   * @returns `active` 为是否活着，附当前状态与 PID（PID 可能为 `null`）
+   */
+  servingSummary(): { active: boolean; state: ServerState; pid: number | null } {
+    const state = this.server.getState();
+    return {
+      active: state === "starting" || state === "running" || state === "stopping",
+      state,
+      pid: this.server.getPid(),
     };
   }
 

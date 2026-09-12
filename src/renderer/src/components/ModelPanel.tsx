@@ -304,9 +304,11 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
             当前平台不支持开机自启（Linux 需要安装桌面项，暂未实现）。
           </p>
         ) : null}
-        {settings?.minimizeToTray === true ? (
+        {settings !== null ? (
           <p className="text-[10px] leading-4 text-slate-500">
-            已开启缩到托盘：点窗口的 ✕ 只是隐藏，服务不会停；真正退出请用托盘菜单的「退出」。
+            {settings.minimizeToTray
+              ? "已开启缩到托盘：点窗口的 ✕ 只是隐藏，服务不会停；真正退出请用托盘菜单的「退出」。"
+              : "未开启：服务在跑时点 ✕ 会先问一次（退出并停止服务 / 缩到托盘继续跑）；服务没跑就直接退出。"}
           </p>
         ) : null}
         <div className="space-y-0.5 border-t border-[#1e2530] pt-1.5">

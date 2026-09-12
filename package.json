@@ -1,0 +1,36 @@
+{
+  "name": "llama-launcher",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "llama.cpp 启动器：core（零依赖、可 CLI 驱动）+ Electron GUI",
+  "main": "out/main/index.js",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "test": "node src/test/run-tests.ts",
+    "typecheck": "tsc --noEmit",
+    "probe": "node src/cli.ts probe",
+    "args": "node src/cli.ts args",
+    "run": "node src/cli.ts run",
+    "cli": "node src/cli.ts"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^22.20.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "electron": "^44.3.0",
+    "electron-vite": "^5.0.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0"
+  }
+}

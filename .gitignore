@@ -1,0 +1,17 @@
+# 依赖与构建产物（core 零依赖，这些只在 M2 引入 Electron 后才出现）
+node_modules/
+dist/
+out/
+release/
+
+# 本地配置与日志：含本机路径，不入库
+llama-launcher.json
+*.log
+*.local.json
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

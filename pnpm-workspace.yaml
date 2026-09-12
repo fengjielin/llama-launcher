@@ -1,0 +1,6 @@
+# pnpm 11 默认拦截依赖的构建脚本（安全考虑）。这里显式放行本项目确实需要的两个：
+#   electron —— postinstall 负责下载 Electron 运行时二进制，不跑就没有 electron.exe
+#   esbuild  —— 放置平台原生的 esbuild 可执行文件（vite / electron-vite 依赖它）
+allowBuilds:
+  electron: true
+  esbuild: true

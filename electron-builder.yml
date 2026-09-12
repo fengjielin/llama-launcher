@@ -18,7 +18,7 @@ files:
   - package.json
   - "!**/*.map"
 
-# 关键一：直接复用已经装好的 Electron 发行目录，不走 electron-builder 的
+# 关键一：复用已经装好的 Electron 发行目录，不走 electron-builder 的
 # 「下载并解压 Electron zip」那条路径。
 #
 # 原因（实测踩坑）：electron-builder 26.x 的 resolveCacheMode 会去读 @electron/get 的
@@ -27,12 +27,31 @@ files:
 #   TypeError: Cannot read properties of undefined (reading 'ReadWrite')
 #     at resolveCacheMode (app-builder-lib/src/util/electronGet.ts)
 # 指定 electronDist 后那条路径根本不会被走到。
-electronDist: node_modules/electron/dist
+#
+# 注意这里指的是 `.electron-dist/`，由 `scripts/package.mjs` 在打包前生成的一份**过滤镜像**：
+# 内容与 node_modules/electron/dist 一致，只少了 resources/default_app.asar。
+# 为什么必须少那一个文件，见下面「关键二」。
+electronDist: .electron-dist
 
-# 关键二：不用 asar 打包。
-# 实测在「复用 electronDist」的路径下，electron-builder 生成完 app.asar 后又会去 unlink 它，
-# 报 EBUSY（句柄未释放）导致打包中断；明文目录也更好排查 ——
-# 出问题时可以直接进 resources/app/ 看产物。代价只是产物略大，对本地工具无所谓。
+# 关键二：产物里不出现任何 .asar 文件。
+#
+# 这条是在源码里逐处核对出来的（app-builder-lib/out/electron/ElectronFramework.js）：
+# 自定义 electronDist 走 "custom unpacked Electron distribution" 分支，依次做三件事 ——
+#   emptyDir(appOutDir) → copyDir(发行目录 → 产物) → return false
+# 最后的 `false` 让 isFullCleanup=false，于是 cleanupAfterUnpack() 里
+# `unlinkIfExists(产物/resources/default_app.asar)` **被整个跳过**（不是"删失败"，是压根不删）。
+# 结果：Electron 自带的 default_app.asar 每个产物里都会留一份，而下一次打包开头的
+# emptyDir(appOutDir) 必须删掉它 —— 那一步不吞错误，于是报
+#   EBUSY: resource busy or locked, unlink '...\resources\default_app.asar'
+# 并中断整个打包。本机实测：两个废弃输出目录里残留的 4 个 .asar 全部长期锁定
+# （可正常读取，但改不了名、删不掉），同目录下新建的普通文件却都能正常删 ——
+# 是本机常驻的安全软件/索引工具在解析 .asar 并持有句柄。
+#
+# 所以对策不是「等它松手」，而是让产物里根本没有 .asar：
+#   · default_app.asar：`scripts/package.mjs` 生成的 .electron-dist 镜像里把它跳过了
+#     （我们自带 app，这个「空应用」用不到；官方下载解压那条路径本来也会删掉它）
+#   · app 本体：本文件保持 asar: false，以 resources/app/ 明文目录形式存在
+# 明文目录顺带也更好排查：出问题可以直接进 resources/app/ 看产物。代价只是产物略大，对本地工具无所谓。
 asar: false
 
 win:

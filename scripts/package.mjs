@@ -1,0 +1,366 @@
+#!/usr/bin/env node
+/**
+ * 打包入口：在交给 electron-builder 之前，先把「产物目录被占用」这件事处理掉。
+ *
+ * ## 为什么需要这一层
+ *
+ * 链路上每一步都在 electron-builder 源码里核对过（app-builder-lib/out/electron/ElectronFramework.js）：
+ *
+ *   1. `electronDist` 指向一个**已解压的目录**时，它走的是 "custom unpacked Electron distribution" 分支：
+ *        await emptyDir(prepareOptions.appOutDir);     // ← ① ┐
+ *        await copyDir(source, destination, {...});    // ← ② │ 这两步是硬失败点
+ *        return false;                                 // ← ③ ┘
+ *   2. ② 是**全量复制**，会把 Electron 自带的 `resources/default_app.asar` 一起复制进产物
+ *      （那是「没给 app 时启动的空应用」，我们自带 app，用不到它）。
+ *   3. ③ 返回 `false` 表示 `isFullCleanup = false`，于是 `cleanupAfterUnpack()` 里那两行
+ *      `unlinkIfExists(产物里的 default_app.asar)` / `unlinkIfExists(产物里的 version)` **被整个跳过**
+ *      —— 也就是说用自定义 electronDist 时，那个 asar 永远留在产物里。
+ *   4. 下一次打包，① 的 `emptyDir(appOutDir)` 要先清空上一次的产物。这一步**不吞错误**：
+ *      一旦那个残留的 `.asar` 被别的进程占用，整个打包就以
+ *        EBUSY: resource busy or locked, unlink '...\resources\default_app.asar'
+ *      中断。本机实测：两个废弃输出目录里残留的 4 个 `.asar` 全部长期锁定
+ *      （可正常读取，但改不了名、删不掉），而同一目录下新建的普通文件都能正常删除 ——
+ *      说明是本机上某个常驻进程（安全软件 / 文件索引）在解析 `.asar` 归档并持有句柄。
+ *
+ * ## 对策
+ *
+ * 不跟那个进程较劲，而是**让产物里根本不出现 `.asar`**：
+ *
+ *   - `default_app.asar`：本脚本在打包前准备一份 `.electron-dist/` 发行目录镜像，
+ *     **跳过** `resources/default_app.asar`，其余文件用**硬链接**指过去（NTFS 硬链接不占额外空间，
+ *     对 electron-builder 的复制来说和普通文件完全一样）。之所以不直接删 `node_modules` 里那个源文件：
+ *     它自己也常被锁住，删不掉；而硬链接镜像只需要读权限。
+ *   - `app.asar`：配置里保持 `asar: false`（见 electron-builder.yml），app 以 `resources/app/` 明文目录存在。
+ *
+ * 于是 ①② 两步都不会碰到任何 `.asar`，打包不再取决于「外部进程此刻有没有攥着那个文件」。
+ *
+ * ## 兜底
+ *
+ * 万一还有别的文件被占用（例如刚生成的 exe 正被杀软扫描），清理失败时本次打包自动改用带时间戳的
+ * 备用输出目录，而不是让整个打包失败，并打印占用文件与两条出路。
+ *
+ * ## 用法
+ *
+ * 一般由 package.json 的 package / package:portable 调起，参数原样透传给 electron-builder：
+ *
+ * ```powershell
+ * node scripts/package.mjs --win --dir      # 免安装目录
+ * node scripts/package.mjs --win portable   # 单文件便携版
+ * node scripts/package.mjs --check          # 只做诊断，不打包
+ * ```
+ *
+ * 环境变量：
+ *   `LLAMA_PACKAGE_OUT`  指定输出目录（默认项目内的 `dist/`），便于把产物放到工作区之外。
+ */
+import fs from "node:fs";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+/** 项目根目录（本脚本在 scripts/ 下）。 */
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+/** electron-builder 的入口脚本：直接 node 执行，避免 Windows 上 .cmd 的引号问题。 */
+const BUILDER_CLI = path.join(ROOT, "node_modules", "electron-builder", "out", "cli", "cli.js");
+
+/** 上一次打包的产物目录（appOutDir），也是唯一需要预先清理的地方。 */
+const APP_OUT_NAME = "win-unpacked";
+
+/** 已安装的 Electron 发行目录（源）。 */
+const ELECTRON_DIST = path.join(ROOT, "node_modules", "electron", "dist");
+
+/** 给打包用的过滤镜像目录（见文件头「对策」）。 */
+const ELECTRON_DIST_MIRROR = path.join(ROOT, ".electron-dist");
+
+/** 镜像里要跳过的文件（相对发行目录），也就是本次问题的元凶。 */
+const SKIPPED_IN_MIRROR = [path.join("resources", "default_app.asar")];
+
+/** 镜像的版本标记：Electron 换版本后镜像要重建。 */
+const MIRROR_MARKER = path.join(ELECTRON_DIST_MIRROR, ".llama-mirror-source");
+
+/** 上次打包留下的安装包/便携版文件名前缀，顺带清掉，避免旧 exe 被杀软扫描时挡住写入。 */
+const ARTIFACT_PREFIX = "llama-launcher-";
+
+/**
+ * 按需打印一行进度。
+ * @param {string} msg 要打印的内容（自带前缀）。
+ */
+function say(msg) {
+  console.log(msg);
+}
+
+/**
+ * 递归删除目录，并把「删不掉的东西」逐条收集起来。
+ *
+ * 不用 `fs.rmSync(dir, {recursive: true})` 的原因：它一遇到 EBUSY 就整体抛错，
+ * 且不会告诉我们是哪几个文件被占用 —— 而这里最需要的信息恰恰就是那几行。
+ *
+ * @param {string} dir 目标目录（不存在时视为已清理干净）。
+ * @returns {{removed: number, blocked: Array<{path: string, code: string, isDir: boolean}>}}
+ *   `removed` 为成功删除的条目数；`blocked` 为删除失败的条目（含错误码）。
+ */
+function removeTree(dir) {
+  const blocked = [];
+  let removed = 0;
+
+  /** @param {string} current 当前遍历到的目录。 */
+  const walk = (current) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch (err) {
+      // 目录不存在 = 本来就干净；其它错误（比如无权限）如实记下来。
+      if (err.code !== "ENOENT") blocked.push({ path: current, code: err.code ?? "?", isDir: true });
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else {
+        try {
+          fs.rmSync(full, { force: true, maxRetries: 3, retryDelay: 120 });
+          removed += 1;
+        } catch (err) {
+          blocked.push({ path: full, code: err.code ?? "?", isDir: false });
+        }
+      }
+    }
+    try {
+      // 子项没删干净时这里也会失败，但那些子项已经记过了，不必重复报。
+      fs.rmdirSync(current);
+    } catch (err) {
+      if (err.code !== "ENOENT" && !blocked.some((b) => b.path === current || b.path.startsWith(current + path.sep))) {
+        blocked.push({ path: current, code: err.code ?? "?", isDir: true });
+      }
+    }
+  };
+
+  if (!fs.existsSync(dir)) return { removed, blocked };
+  walk(dir);
+  return { removed, blocked };
+}
+
+/**
+ * 生成「被占用文件的说明」文本。
+ *
+ * @param {Array<{path: string, code: string, isDir: boolean}>} blocked `removeTree` 收集到的失败条目。
+ * @param {number} [limit] 最多列几条，默认 5。
+ * @returns {string[]} 每行一条，供调用方直接打印。
+ */
+function describeBlocked(blocked, limit = 5) {
+  const lines = blocked
+    .slice(0, limit)
+    .map((b) => `      ${path.relative(ROOT, b.path) || b.path}  (${b.code})`);
+  if (blocked.length > limit) lines.push(`      …还有 ${blocked.length - limit} 个`);
+  return lines;
+}
+
+/**
+ * 读取已安装 Electron 的版本号，用作镜像的有效性标记。
+ *
+ * @returns {string} 形如 `44.3.0`；读不到时返回 `unknown`（此时镜像每次都会重建）。
+ */
+function readElectronVersion() {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "node_modules", "electron", "package.json"), "utf8"));
+    return String(pkg.version ?? "unknown");
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
+ * 把一份发行目录镜像到目标目录：保留目录结构，文件优先用硬链接，跳过黑名单文件。
+ *
+ * 硬链接的好处是**不占额外空间**（367 MB 的 Electron 发行目录直接镜像过去也只有目录项的开销），
+ * 而且对读取方而言与普通文件完全等价 —— electron-builder 的 `copyDir()` 就是逐个读文件再写出，
+ * 所以镜像不会被它「原样复制成链接」。链接失败时（极端情况下跨卷）退化为真实复制。
+ *
+ * @param {string} src 源目录绝对路径。
+ * @param {string} dst 目标目录绝对路径（调用方保证其父目录存在）。
+ * @param {Set<string>} skip 需要跳过的相对路径集合（`path.relative` 的形态）。
+ * @returns {{linked: number, copied: number, skipped: string[]}} 统计信息。
+ */
+function mirrorDir(src, dst, skip) {
+  const stats = { linked: 0, copied: 0, skipped: [] };
+  fs.mkdirSync(dst, { recursive: true });
+
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const from = path.join(src, entry.name);
+    const rel = path.relative(ELECTRON_DIST, from);
+    if (skip.has(rel)) {
+      stats.skipped.push(rel);
+      continue;
+    }
+    const to = path.join(dst, entry.name);
+    if (entry.isDirectory()) {
+      const sub = mirrorDir(from, to, skip);
+      stats.linked += sub.linked;
+      stats.copied += sub.copied;
+      stats.skipped.push(...sub.skipped);
+      continue;
+    }
+    try {
+      fs.linkSync(from, to);
+      stats.linked += 1;
+    } catch {
+      fs.copyFileSync(from, to);
+      stats.copied += 1;
+    }
+  }
+  return stats;
+}
+
+/**
+ * 准备给打包用的 Electron 发行目录镜像（幂等）。
+ *
+ * 已经存在且源版本没变时直接复用；否则删除重建。删除失败的残留不会影响正确性 ——
+ * 镜像里没有 `.asar`，剩下的普通文件在本机都能正常删除。
+ *
+ * @returns {{reused: boolean, dir: string, version: string, stats: object|null, blocked: Array<object>}}
+ *   `reused` 为 true 时表示沿用已有镜像，`stats` 为 null。
+ */
+function ensureElectronDistMirror() {
+  const version = readElectronVersion();
+  if (fs.existsSync(MIRROR_MARKER)) {
+    try {
+      if (fs.readFileSync(MIRROR_MARKER, "utf8").trim() === version) {
+        return { reused: true, dir: ELECTRON_DIST_MIRROR, version, stats: null, blocked: [] };
+      }
+    } catch {
+      /* 标记读不了就重建 */
+    }
+  }
+
+  const cleared = removeTree(ELECTRON_DIST_MIRROR);
+  const skip = new Set(SKIPPED_IN_MIRROR);
+  const stats = mirrorDir(ELECTRON_DIST, ELECTRON_DIST_MIRROR, skip);
+  fs.writeFileSync(
+    MIRROR_MARKER,
+    `${version}\n`,
+    "utf8",
+  );
+  return { reused: false, dir: ELECTRON_DIST_MIRROR, version, stats, blocked: cleared.blocked };
+}
+
+/**
+ * 选定本次打包的输出目录，并尽量把它清理干净。
+ *
+ * 顺序：`LLAMA_PACKAGE_OUT` → 项目内 `dist/`。首选目录的 `win-unpacked` 清不掉时，
+ * 自动改用带时间戳的备用目录（`<首选>-fallback-<yyyyMMddHHmmss>`），
+ * 因为「清不掉」意味着这个路径在本次以及后续每次打包都会失败，硬顶没有意义。
+ *
+ * @param {string} preferred 首选输出目录的绝对路径。
+ * @returns {{dir: string, fallback: boolean, blocked: Array<object>, removed: number}}
+ *   `dir` 为最终选定的绝对路径；`fallback` 表示是否退到了备用目录。
+ */
+function prepareOutputDir(preferred) {
+  // 顺带清掉上次的安装包（只删我们自己的命名前缀，避免误删目录里的其它东西）。
+  if (fs.existsSync(preferred)) {
+    for (const name of fs.readdirSync(preferred)) {
+      if (name.startsWith(ARTIFACT_PREFIX) && name.endsWith(".exe")) {
+        try {
+          fs.rmSync(path.join(preferred, name), { force: true, maxRetries: 3, retryDelay: 120 });
+        } catch {
+          /* 删不掉就交给后面判断，不在这里报错 */
+        }
+      }
+    }
+  }
+
+  const first = removeTree(path.join(preferred, APP_OUT_NAME));
+  if (first.blocked.length === 0) return { dir: preferred, fallback: false, blocked: [], removed: first.removed };
+
+  const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+  const alternate = `${preferred}-fallback-${stamp}`;
+  const second = removeTree(path.join(alternate, APP_OUT_NAME));
+  return { dir: alternate, fallback: true, blocked: first.blocked, removed: first.removed + second.removed };
+}
+
+/**
+ * 打印「输出目录被占用」的完整说明：现象、原因、两条出路。
+ *
+ * @param {string} preferred 首选（清不掉的）输出目录。
+ * @param {string} chosen 本次实际使用的输出目录。
+ * @param {Array<object>} blocked 清不掉的条目。
+ */
+function explainFallback(preferred, chosen, blocked) {
+  say("");
+  say("  ⚠ 首选输出目录里有文件被其它进程占用，清不掉：");
+  for (const line of describeBlocked(blocked)) say(line);
+  say("");
+  say("    占用者通常是安全软件或文件索引工具 —— 本机在跑火绒（HipsDaemon / HipsTray），");
+  say("    它会解析刚生成的产物并攥着句柄；Everything 开了内容索引也会这样。");
+  say("    本次已自动改用备用输出目录：");
+  say(`      ${path.relative(ROOT, chosen) || chosen}`);
+  say("");
+  say("    想回到原来的目录：重启一次电脑（句柄随之释放）后删掉下面的残留即可 ——");
+  say(`      ${path.relative(ROOT, preferred) || preferred}`);
+  say("    更省事的长期做法：把本项目目录与输出目录加进火绒的「信任区」，");
+  say("    或在 Everything 里关掉内容索引。");
+  say("");
+}
+
+/**
+ * 主流程：准备发行目录镜像 → 选并清理输出目录 → 调 electron-builder → 报告产物路径。
+ *
+ * @returns {number} 进程退出码（0 成功；`--check` 模式下固定为 0）。
+ */
+function main() {
+  const argv = process.argv.slice(2);
+  const checkOnly = argv.includes("--check");
+  const builderArgs = argv.filter((a) => a !== "--check");
+
+  say("▸ 准备给打包用的 Electron 发行目录");
+  const mirror = ensureElectronDistMirror();
+  if (mirror.reused) {
+    say(`  · 复用 .electron-dist（Electron ${mirror.version}）`);
+  } else {
+    const skipped = mirror.stats.skipped.length > 0 ? `，跳过 ${mirror.stats.skipped.join("、")}` : "";
+    say(`  · 已生成 .electron-dist（Electron ${mirror.version}）：`
+      + `硬链接 ${mirror.stats.linked} 个、复制 ${mirror.stats.copied} 个${skipped}`);
+    if (mirror.blocked.length > 0) {
+      say("  ⚠ 重建镜像时有旧文件没能删掉（不影响本次打包）：");
+      for (const line of describeBlocked(mirror.blocked)) say(line);
+    }
+  }
+
+  const preferred = path.resolve(process.env.LLAMA_PACKAGE_OUT || path.join(ROOT, "dist"));
+  say(`▸ 检查输出目录 ${path.relative(ROOT, preferred) || preferred}`);
+  const picked = prepareOutputDir(preferred);
+  if (picked.fallback) explainFallback(preferred, picked.dir, picked.blocked);
+  else say(`  · 已清理 ${path.relative(ROOT, path.join(picked.dir, APP_OUT_NAME)) || APP_OUT_NAME}（删除 ${picked.removed} 项）`);
+
+  if (checkOnly) {
+    say(`✔ 诊断结束：本次会输出到 ${picked.dir}`);
+    return 0;
+  }
+
+  if (!fs.existsSync(BUILDER_CLI)) {
+    console.error(`✘ 找不到 electron-builder：${BUILDER_CLI}（先跑一次 pnpm install）`);
+    return 1;
+  }
+
+  say("▸ 调用 electron-builder");
+  const result = spawnSync(
+    process.execPath,
+    [BUILDER_CLI, ...builderArgs, `--config.directories.output=${picked.dir}`],
+    { cwd: ROOT, stdio: "inherit" },
+  );
+  if (result.status !== 0) {
+    console.error(`\n✘ electron-builder 退出码 ${result.status ?? "?"}（见上面的输出）`);
+    return result.status ?? 1;
+  }
+
+  const exe = path.join(picked.dir, APP_OUT_NAME, "llama-launcher.exe");
+  if (fs.existsSync(exe)) {
+    const mb = (fs.statSync(exe).size / 1024 / 1024).toFixed(1);
+    say(`\n✔ 打包完成：${exe}（${mb} MB）`);
+    say("  配置与数据会落在 exe 旁边：llama-launcher.json 与 data/");
+  } else {
+    say(`\n✔ 打包完成：${picked.dir}（未发现 win-unpacked/llama-launcher.exe，可能是 portable/nsis 目标）`);
+  }
+  return 0;
+}
+
+process.exit(main());

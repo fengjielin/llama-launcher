@@ -3,6 +3,10 @@ node_modules/
 dist/
 out/
 release/
+# 输出目录被占用时，打包会退到带时间戳的备用目录（见 scripts/package.mjs）
+dist-fallback-*/
+# 打包用的 Electron 发行目录过滤镜像（硬链接，见 scripts/package.mjs）
+.electron-dist/
 
 # 本地配置与日志：含本机路径，不入库
 llama-launcher.json

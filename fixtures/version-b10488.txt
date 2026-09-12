@@ -1,0 +1,2 @@
+﻿version: 0.1.2-dev (build 10488, commit 9d77fa172)
+built with Clang 20.1.8 for Windows x86_64

@@ -1,0 +1,6 @@
+Sat Sep 12 16:11:26 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 566.36                 Driver Version: 566.36         CUDA Version: 12.7     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                  Driver-Model | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |

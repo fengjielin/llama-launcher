@@ -283,6 +283,15 @@ export interface AppSettingsPayload extends AppSettings {
   autostartSupported: boolean;
   /** 设置文件的落盘位置（界面展示用，方便用户直接查） */
   settingsPath: string;
+  /** Chromium 运行时数据目录（缓存等）；便携模式下在 exe 同级的 data/ 里 */
+  dataDir: string;
+  /** 当前生效的配置文件路径 */
+  configPath: string;
+  /**
+   * 是否处于便携模式：配置与数据都在 exe 同目录，`%APPDATA%` 里不留东西。
+   * 只有打包后且 exe 目录可写时才为 `true`。
+   */
+  portable: boolean;
 }
 
 export function isErrorPayload(value: unknown): value is ErrorPayload {

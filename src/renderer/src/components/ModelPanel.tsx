@@ -309,7 +309,16 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
             已开启缩到托盘：点窗口的 ✕ 只是隐藏，服务不会停；真正退出请用托盘菜单的「退出」。
           </p>
         ) : null}
-        <p className="break-all text-[10px] leading-4 text-slate-500">设置文件：{settings?.settingsPath ?? "读取中…"}</p>
+        <div className="space-y-0.5 border-t border-[#1e2530] pt-1.5">
+          <p className="text-[10px] leading-4 text-slate-400">
+            {settings?.portable === true
+              ? "便携模式：配置与数据都在应用目录内，%APPDATA% 里不留东西"
+              : "配置与数据放在用户数据目录（应用目录不可写时的回退）"}
+          </p>
+          <p className="break-all text-[10px] leading-4 text-slate-500">配置：{settings?.configPath ?? "读取中…"}</p>
+          <p className="break-all text-[10px] leading-4 text-slate-500">数据：{settings?.dataDir ?? "读取中…"}</p>
+          <p className="break-all text-[10px] leading-4 text-slate-500">设置：{settings?.settingsPath ?? "读取中…"}</p>
+        </div>
       </section>
     </aside>
   );

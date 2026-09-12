@@ -3,7 +3,7 @@
  * 业务逻辑全在 LauncherSession（不 import electron，可单测）。
  */
 
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
@@ -29,6 +29,7 @@ import type {
 } from "../shared/ipc.ts";
 import { LauncherSession } from "./session.ts";
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, settingsPathFor } from "./settings.ts";
+import { chooseDataLayout } from "./paths.ts";
 import { TrayController } from "./tray.ts";
 import type { TrayState } from "./tray.ts";
 
@@ -51,21 +52,39 @@ const AUTOSTART_SUPPORTED = process.platform === "win32" || process.platform ===
 const START_HIDDEN = process.argv.includes("--hidden");
 
 /**
- * 默认配置文件的路径。
+ * 数据与配置的落点，在模块加载时就算好。
  *
- * 三种情况，按"用户最可能把文件放哪儿"排：
- * 1. **开发时**：项目根目录（和应用代码在一起，改起来一目了然）
- * 2. **打包后的便携版**：exe 同目录 —— 便携版的惯例就是"整个文件夹拷走就能用"，
- *    配置跟着 exe 走才不会一换机器就丢
- * 3. **打包后的安装版**：用户数据目录（安装目录是只读的，写不进去）
+ * 必须**早于 app ready** 调用 `app.setPath("userData", ...)`：Electron 会在 ready 之后
+ * 立刻开始使用这个目录（Chromium 的缓存、Local Storage 等），晚了就改不动了。
+ *
+ * 注意 `defaultUserDataDir` 传的是**函数**：`app.getPath("userData")` 一调用就会把
+ * `%APPDATA%\<应用名>` 建出来（实测），而便携模式下我们不需要那个目录 ——
+ * 惰性求值才能让它彻底不出现。
+ */
+const layout = chooseDataLayout({
+  isPackaged: app.isPackaged,
+  exeDir: dirname(app.getPath("exe")),
+  projectDir: app.getAppPath(),
+  defaultUserDataDir: () => app.getPath("userData"),
+});
+if (layout.portable) {
+  // 便携模式：把 Chromium 的运行时数据也挪到 exe 旁边，
+  // 这样整个文件夹拷走 = 配置与数据一起带走，不会在用户的 AppData 里留下任何东西
+  app.setPath("userData", layout.dataDir);
+}
+
+/**
+ * 配置文件的路径。
+ *
+ * 开发时在项目根目录（改起来一目了然）；打包后默认**就在 exe 同目录**
+ * （便携版惯例：整个文件夹拷走就能用）；只有 exe 所在目录不可写时
+ * （例如 NSIS 装进了 Program Files）才退回 userData。
+ * 决策逻辑与理由见 `paths.ts` 的 {@link chooseDataLayout}。
  *
  * @returns 配置文件的绝对路径
  */
 function defaultConfigPath(): string {
-  if (!app.isPackaged) return join(app.getAppPath(), "llama-launcher.json");
-  const portable = join(dirname(app.getPath("exe")), "llama-launcher.json");
-  if (existsSync(portable)) return portable;
-  return join(app.getPath("userData"), "llama-launcher.json");
+  return layout.configPath;
 }
 
 /**
@@ -100,7 +119,14 @@ function getSession(): LauncherSession {
 
 /** 打包设置载荷：持久化字段 + 运行时信息（平台是否支持自启、文件位置） */
 function settingsPayload(): AppSettingsPayload {
-  return { ...settings, autostartSupported: AUTOSTART_SUPPORTED, settingsPath };
+  return {
+    ...settings,
+    autostartSupported: AUTOSTART_SUPPORTED,
+    settingsPath,
+    dataDir: layout.dataDir,
+    configPath: layout.configPath,
+    portable: layout.portable,
+  };
 }
 
 /**

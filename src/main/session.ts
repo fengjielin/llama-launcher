@@ -114,7 +114,9 @@ export class LauncherSession {
    * 从磁盘重读配置。
    *
    * 边界：**配置文件不存在不算错误** —— 这是首次运行的正常情况。
-   * 此时退回默认配置，并尝试自动探测 llama.cpp 目录，把结果写进告警提示用户。
+   * 此时退回默认配置，并尝试自动探测 llama.cpp 目录；同时**把这份默认配置写到磁盘上**，
+   * 这样便携版用户一运行就能在 exe 旁边看到 `llama-launcher.json`，可以直接编辑。
+   * 目标位置不可写（只读目录）也不影响使用，只是多一条告警。
    */
   private reloadConfig(): void {
     if (!existsSync(this.configPath)) {
@@ -124,6 +126,14 @@ export class LauncherSession {
         `配置文件不存在（${this.configPath}），已使用默认值` +
           (discovered === null ? "；也没能自动探测到 llama.cpp 目录，请在界面里指定" : `；已自动探测到 ${discovered}`),
       ];
+      try {
+        saveConfigFile(this.configPath, this.config);
+        this.configWarnings.push(`已生成默认配置：${this.configPath}`);
+      } catch (err) {
+        this.configWarnings.push(
+          `默认配置写不进磁盘（${err instanceof Error ? err.message : String(err)}）：修改参数后请用「另存为」选一个可写的位置`,
+        );
+      }
       return;
     }
     const loaded = loadConfigFile(this.configPath);

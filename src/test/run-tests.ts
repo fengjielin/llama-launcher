@@ -25,3 +25,4 @@ import "./profiles.test.ts";
 // ---- M4：环境自检 ----
 import "./pe.test.ts";
 import "./precheck.test.ts";
+import "./paths.test.ts";

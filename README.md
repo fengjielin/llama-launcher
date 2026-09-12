@@ -499,6 +499,29 @@ $env:LLAMA_PACKAGE_OUT='E:\llama-launcher-dist'
 pnpm package
 ```
 
+#### 产物目录里的配置会被保留（但更建议别在那儿跑）
+
+便携版把配置放在 **exe 旁边**，而打包前会清空 `win-unpacked` —— 等于把用户的配置一起删了。
+于是出现过一个很绕的坑：把预加载模型、每个模型的 `ctx-size` / `n-predict` 都调好之后重建一次，
+产物里那份配置被清掉、应用下次启动重新探测生成一份默认配置（预设从旧 `presets.ini` 导入、
+输出上限用程序默认的 8192），命令行又回到 `-c 16384 -n 8192`，看起来像"改了没生效"。
+
+现在 `scripts/package.mjs` 会在清理前把这两样记下来、构建成功后原样放回：
+
+```
+· 发现上次运行留下的 llama-launcher.json，构建后会原样放回
+· 已放回：llama-launcher.json（应用下次启动直接用它，不会重新探测）
+```
+
+（放回 `llama-launcher.json` 与 `data/llama-launcher-settings.json`；Chromium 缓存不放回。）
+
+不过更省事的做法是：**把 `win-unpacked` 拷到一个稳定目录长期运行**（例如
+`E:\llama-launcher-dist\llama-launcher\`），别直接在 `dist/` 里跑 —— 那里每次打包都会被重建。
+
+> ⚠️ 还要注意：**开发模式（`pnpm dev`）与打包版读的是两份不同的配置** ——
+> 前者用项目根目录的 `llama-launcher.json`，后者用 **exe 旁边**那份。
+> 改了一份却发现"打包版没变化"，多半就是改错了文件（这个坑也踩过）。
+
 
 ### 数据放哪儿：便携优先
 

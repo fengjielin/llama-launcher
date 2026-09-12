@@ -51,10 +51,12 @@
  *
  * 环境变量：
  *   `LLAMA_PACKAGE_OUT`  指定输出目录（默认项目内的 `dist/`），便于把产物放到工作区之外。
- *   `LLAMA_PACKAGE_TOUCH=1`  打包后把产物里所有文件/目录的时间戳统一成构建时间 ——
- *     Electron 自带的文件（dll / pak / locales / electron.exe）时间戳是 1980-01-01
- *     （官方 zip 的 MS-DOS 时间字段写的是最小值，可复现构建的常规做法），看目录时会显得很怪。
- *     它不影响运行，所以默认不动；想统一就打开这个开关。
+ *   `LLAMA_PACKAGE_TOUCH=0`  保留 Electron 自带的原始时间戳（默认会把产物时间戳统一成构建时间）。
+ *
+ * 关于时间戳：Electron 自带的文件（dll / pak / locales / electron.exe）时间戳是 1980-01-01
+ * （官方 zip 的 MS-DOS 时间字段写的是最小值，可复现构建的常规做法；按 UTC 解释后在 UTC+8 显示成
+ * 08:00）。它不影响运行，但目录里新旧混杂看着很怪，所以**打包后默认统一成构建时间**；
+ * 想保留原样就加 `--no-touch`。
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -140,18 +142,6 @@ function restoreRuntimeFiles(appOutDir, kept) {
     }
   }
   return restored;
-}
-
-/**
- * 读取一个"开关型"环境变量。
- *
- * @param {string} name 变量名
- * @returns {boolean} 值为 1 / true / yes / on（忽略大小写与首尾空格）时为 `true`
- */
-function envFlag(name) {
-  const raw = process.env[name];
-  if (raw === undefined) return false;
-  return ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
 }
 
 /**
@@ -434,9 +424,15 @@ function explainFallback(preferred, chosen, blocked) {
 function main() {
   const argv = process.argv.slice(2);
   const checkOnly = argv.includes("--check");
-  // 两种等价写法：命令行 `--touch` 或环境变量 `LLAMA_PACKAGE_TOUCH=1`
-  const touch = argv.includes("--touch") || envFlag("LLAMA_PACKAGE_TOUCH");
-  const builderArgs = argv.filter((a) => a !== "--check" && a !== "--touch");
+  /**
+   * 是否统一时间戳：**默认开**。
+   *
+   * 早先做成默认关闭（要显式 `LLAMA_PACKAGE_TOUCH=1`），结果是"重建完发现产物里那 71 个文件
+   * 时间还是 1980"反复出现 —— 开关写了等于没写。既然统一时间戳没有任何副作用（只改 mtime），
+   * 就让它默认生效；想保留 Electron 原始时间戳的人用 `--no-touch`（或 `LLAMA_PACKAGE_TOUCH=0`）关掉。
+   */
+  const touch = !argv.includes("--no-touch") && process.env["LLAMA_PACKAGE_TOUCH"] !== "0";
+  const builderArgs = argv.filter((a) => a !== "--check" && a !== "--touch" && a !== "--no-touch");
 
   say("▸ 准备给打包用的 Electron 发行目录");
   const mirror = ensureElectronDistMirror();
@@ -507,9 +503,8 @@ function main() {
         + (touched.failed > 0 ? `（${touched.failed} 个失败，通常是正被占用）` : ""),
     );
   } else if (fs.existsSync(path.join(picked.dir, APP_OUT_NAME))) {
-    // 提示一下这个开关的存在 —— 否则用户会觉得"产物里那堆 1980 的文件怎么改都没变化"
-    say("  · 提示：Electron 自带的文件时间戳是 1980-01-01（官方 zip 的可复现构建时间戳）；");
-    say("    想统一成构建时间就跑 pnpm package:touch（等价于给本次命令加 --touch）");
+    // 显式关了才走到这里：说清代价，免得回头又觉得"时间怎么没变"
+    say("  · 已按 --no-touch 保留 Electron 原始时间戳（那 71 个文件会是 1980-01-01，属正常）");
   }
 
   if (fs.existsSync(exe)) {

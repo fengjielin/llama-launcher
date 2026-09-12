@@ -434,7 +434,9 @@ function explainFallback(preferred, chosen, blocked) {
 function main() {
   const argv = process.argv.slice(2);
   const checkOnly = argv.includes("--check");
-  const builderArgs = argv.filter((a) => a !== "--check");
+  // 两种等价写法：命令行 `--touch` 或环境变量 `LLAMA_PACKAGE_TOUCH=1`
+  const touch = argv.includes("--touch") || envFlag("LLAMA_PACKAGE_TOUCH");
+  const builderArgs = argv.filter((a) => a !== "--check" && a !== "--touch");
 
   say("▸ 准备给打包用的 Electron 发行目录");
   const mirror = ensureElectronDistMirror();
@@ -487,7 +489,7 @@ function main() {
   const restored = restoreRuntimeFiles(path.join(picked.dir, APP_OUT_NAME), keptRuntime);
   if (restored.length > 0) say(`  · 已放回：${restored.join("、")}（应用下次启动直接用它，不会重新探测）`);
 
-  if (envFlag("LLAMA_PACKAGE_TOUCH")) {
+  if (touch) {
     const when = new Date();
     const touched = touchTree(path.join(picked.dir, APP_OUT_NAME), when);
     // 顺带把安装包/便携版也刷一遍，免得同一个目录里新旧时间混杂
@@ -504,6 +506,10 @@ function main() {
       `  · 已统一时间戳为 ${when.toLocaleString()}：文件 ${touched.files} 个、目录 ${touched.dirs} 个`
         + (touched.failed > 0 ? `（${touched.failed} 个失败，通常是正被占用）` : ""),
     );
+  } else if (fs.existsSync(path.join(picked.dir, APP_OUT_NAME))) {
+    // 提示一下这个开关的存在 —— 否则用户会觉得"产物里那堆 1980 的文件怎么改都没变化"
+    say("  · 提示：Electron 自带的文件时间戳是 1980-01-01（官方 zip 的可复现构建时间戳）；");
+    say("    想统一成构建时间就跑 pnpm package:touch（等价于给本次命令加 --touch）");
   }
 
   if (fs.existsSync(exe)) {

@@ -15,6 +15,7 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "package": "electron-vite build && node scripts/package.mjs --win --dir",
+    "package:touch": "electron-vite build && node scripts/package.mjs --win --dir --touch",
     "package:portable": "electron-vite build && node scripts/package.mjs --win portable",
     "package:check": "node scripts/package.mjs --check",
     "test": "node src/test/run-tests.ts",

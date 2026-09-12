@@ -26,13 +26,31 @@ let win: BrowserWindow | null = null;
 let session: LauncherSession | null = null;
 let quitting = false;
 
-/** 配置默认放项目根目录（开发时一目了然）；打包后放用户数据目录（安装目录只读） */
+/**
+ * 默认配置文件的路径。
+ *
+ * 开发时放在项目根目录（和应用代码在一起，改起来一目了然）；
+ * 打包后必须放用户数据目录，因为安装目录是只读的，写配置文件会失败。
+ *
+ * @returns 配置文件的绝对路径
+ */
 function defaultConfigPath(): string {
   return app.isPackaged
     ? join(app.getPath("userData"), "llama-launcher.json")
     : join(app.getAppPath(), "llama-launcher.json");
 }
 
+/**
+ * 取会话单例（懒加载）。
+ *
+ * 之所以懒加载：创建会话时会读配置文件、探测 llama-server，属于"用到了才付这个成本"；
+ * 同时这里把日志与状态回调接到窗口上 —— 会话本身不认识 electron，
+ * 事件由这一层转发给渲染层。
+ *
+ * 注意 `win?.` 的空值保护：窗口可能已关闭（正常退出流程），此时事件直接丢掉即可。
+ *
+ * @returns 全局唯一的 {@link LauncherSession}
+ */
 function getSession(): LauncherSession {
   if (session === null) {
     session = new LauncherSession(defaultConfigPath(), {
@@ -43,6 +61,20 @@ function getSession(): LauncherSession {
   return session;
 }
 
+/**
+ * 创建主窗口并加载界面。
+ *
+ * 几个关键设置：
+ * - `show: false` + `ready-to-show` 再显示：避免先出现白屏再闪出内容
+ * - `contextIsolation: true` + `nodeIntegration: false`：渲染层拿不到 Node 能力，
+ *   只能通过 preload 暴露的窄 API 办事
+ * - `sandbox: false`：preload 是 ESM/CJS 混合产物，需要关掉沙箱渲染进程才能加载
+ *   （安全性由 contextIsolation + 窄 API 保证，不靠沙箱）
+ * - 开发模式走 `ELECTRON_RENDERER_URL`（Vite dev server，有 HMR），
+ *   否则加载构建产物 `out/renderer/index.html`
+ *
+ * @returns 窗口创建并加载完成时 resolve
+ */
 async function createWindow(): Promise<void> {
   win = new BrowserWindow({
     width: 1400,
@@ -55,6 +87,7 @@ async function createWindow(): Promise<void> {
     show: false,
     webPreferences: {
       preload: preloadPath,
+      // ESM/CJS 混合的 preload 需要非沙箱渲染进程；安全性靠 contextIsolation + 窄 API 保证
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
@@ -86,6 +119,11 @@ async function createWindow(): Promise<void> {
  * 为什么需要它：界面到底渲染出了什么，光看源码不算数 —— React 有没有挂载、IPC 有没有通、
  * 配置有没有读到、命令行有没有拼出来、哪些参数被置灰，导出文本加截图一眼就能核对，
  * 而且不需要人守在屏幕前。截的是渲染内容本身（capturePage），不受窗口是否被遮挡影响。
+ *
+ * 执行顺序：等 3.5s（首次渲染 + 自动探测都要时间）→ 可选执行一段 JS → 导出文本与截图
+ * → **无论成败都退出应用**（`finally` 里 `app.quit()`），保证无人值守时不会挂住。
+ *
+ * @param target 要自检的窗口；未设置 `LLAMA_LAUNCHER_UI_DUMP` 时本函数直接返回，不产生任何副作用
  */
 function installUiExport(target: BrowserWindow): void {
   const base = process.env["LLAMA_LAUNCHER_UI_DUMP"];
@@ -127,6 +165,7 @@ function installUiExport(target: BrowserWindow): void {
   });
 }
 
+/** 各类路径选择对话框的文件过滤器；`directory` 走 openDirectory，不需要过滤器 */
 const DIALOG_FILTERS: Record<PickKind, FileFilter[]> = {
   gguf: [{ name: "GGUF 模型", extensions: ["gguf"] }],
   ini: [{ name: "presets.ini", extensions: ["ini"] }],
@@ -134,17 +173,41 @@ const DIALOG_FILTERS: Record<PickKind, FileFilter[]> = {
   directory: [],
 };
 
-/** 有窗口时以它为父窗口（对话框居中且模态），没有就退化成无父窗口调用 */
+/**
+ * 打开文件/目录选择框。
+ *
+ * 封装的原因：Electron 的重载要求"有父窗口"和"无父窗口"两种签名分开调用，
+ * 直接写 `showOpenDialog(win ?? undefined, ...)` 类型上过不去，运行期也会出问题。
+ *
+ * @param options 对话框选项（标题、过滤器、是否选目录等）
+ * @returns 选择结果；用户取消时 `canceled` 为 `true`
+ */
 async function showOpen(options: OpenDialogOptions): Promise<OpenDialogReturnValue> {
   const parent = win;
   return parent === null ? dialog.showOpenDialog(options) : dialog.showOpenDialog(parent, options);
 }
 
+/**
+ * 打开另存为对话框，理由同 {@link showOpen}。
+ *
+ * @param options 对话框选项（标题、默认路径、过滤器）
+ * @returns 选择结果；用户取消时 `canceled` 为 `true`
+ */
 async function showSave(options: SaveDialogOptions): Promise<SaveDialogReturnValue> {
   const parent = win;
   return parent === null ? dialog.showSaveDialog(options) : dialog.showSaveDialog(parent, options);
 }
 
+/**
+ * 注册全部 IPC 通道。
+ *
+ * 约定：**每个 handler 只做两件事** —— 必要时弹对话框、然后把活交给 `LauncherSession`。
+ * 业务逻辑一律不写在这里（那样就没法脱离 electron 做单测了）。
+ * 通道名统一取自 `IPC` 常量，避免两侧手写字符串写错。
+ *
+ * 错误处理策略：能展示给用户的失败（找不到 exe、拼装失败、迁移的文件不是合法 JSON）
+ * 都以返回值表达；只有真正意外的异常才让它冒泡成 IPC 拒绝。
+ */
 function registerIpc(): void {
   const s = (): LauncherSession => getSession();
 
@@ -158,6 +221,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.logsRecent, () => s().recentLogs());
 
   ipcMain.handle(IPC.configSave, (_e, config: LauncherConfig) => s().saveConfig(config));
+  // 另存为：取消就原样返回，不写盘；保存成功后把界面上的配置路径同步成新路径
   ipcMain.handle(IPC.configSaveAs, async (_e, config: LauncherConfig) => {
     const target = await showSave({
       title: "另存配置",
@@ -194,12 +258,15 @@ function registerIpc(): void {
       const payload = s().migrateFrom(path);
       return { canceled: false, path: payload.configPath, payload, warnings: payload.warnings };
     } catch (err) {
+      // 迁移失败（选错了文件、JSON 坏了）不该让界面崩掉：
+      // 退回当前状态并只把原因放进 warnings 展示
       const message = err instanceof Error ? err.message : String(err);
       const payload = s().bootstrap();
       return { canceled: false, path: null, payload, warnings: [`迁移失败：${message}`] };
     }
   });
 
+  // 通用路径选择：模型/目录/presets.ini 都由界面发起，这里按 kind 决定选文件还是选目录
   ipcMain.handle(IPC.pickPath, async (_e, request: PickPathRequest): Promise<PickPathResult> => {
     const filters = DIALOG_FILTERS[request.kind] ?? [];
     const picked = await showOpen({
@@ -213,6 +280,8 @@ function registerIpc(): void {
     return { canceled: false, path };
   });
 
+  // 用系统默认浏览器打开 llama-server 自带的 WebUI；
+  // 地址取会话推导出的 baseUrl（端口可能因顺延而与配置不同）
   ipcMain.handle(IPC.openWebUi, async () => {
     const status = await s().status();
     await shell.openExternal(status.baseUrl);
@@ -233,6 +302,7 @@ app.whenReady().then(async () => {
   });
 });
 
+// macOS 上关掉所有窗口不等于退出应用，点 Dock 图标要能重新开窗
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });

@@ -13,10 +13,19 @@ import type {
 } from "../../../shared/ipc.ts";
 import { getApi } from "../api.ts";
 
+/** 界面最多保留多少行日志（主进程侧另有一份 4000 条的缓冲，用于失败诊断） */
 const LOG_LIMIT = 3000;
+/** 配置变化后等多久才去重拼命令行 —— 防的是"每敲一个字符就请求一次" */
 const PREVIEW_DEBOUNCE_MS = 350;
+/** 服务运行时的状态轮询间隔（含 `/health` 检查） */
 const STATUS_POLL_MS = 2000;
 
+/**
+ * 界面需要的全部状态与操作，由 {@link useLauncher} 返回。
+ *
+ * 拆成"数据字段 + 动作方法"两段：数据是只读快照，改动一律通过动作方法走
+ * （`update` 改配置、`pick` 选路径、`save` 落盘…），这样状态变化的入口只有一个。
+ */
 export interface LauncherController {
   ready: boolean;
   bridgeMissing: boolean;
@@ -47,6 +56,12 @@ export interface LauncherController {
   dismissError: () => void;
 }
 
+/**
+ * 把任意抛出物转成可展示的字符串。
+ *
+ * 之所以不直接用 `String(err)`：`throw "字符串"` 与 `throw new Error(...)` 都会出现，
+ * 这里统一成前者取 message、后者原样。
+ */
 function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -56,6 +71,12 @@ function message(err: unknown): string {
  *
  * 数据流是单向的：config 变化 → 防抖后请主进程拼一次命令行 → 得到 preview（含决策表）；
  * 界面从不自己拼参数，所以"界面上看到的命令"和"实际启动的命令"永远是同一条。
+ *
+ * 内部有三条自动发生的线：初始化（拉配置 + 订阅推送 + 探测能力）、
+ * 配置变化后的防抖重拼、以及服务运行时的状态轮询。
+ *
+ * @returns 状态与操作，见 {@link LauncherController}；在浏览器里直接打开（没有 preload 桥）时
+ *   `bridgeMissing` 为 `true`，界面应改为提示用户用桌面壳启动
  */
 export function useLauncher(): LauncherController {
   const api = useMemo(() => getApi(), []);
@@ -76,6 +97,14 @@ export function useLauncher(): LauncherController {
   const [logs, setLogs] = useState<LogPush[]>([]);
   const [status, setStatus] = useState<StatusPayload | null>(null);
 
+  /**
+   * 用一次初始化载荷整体替换本地状态（启动、打开配置、导入 v1.9 后都走它）。
+   *
+   * 之所以整体替换而不是逐个 setState：这些载荷代表"换了一份配置"，
+   * 逐字段更新容易出现"配置换了但参数表还是旧的"这种不一致。
+   *
+   * @param payload 主进程返回的初始化载荷
+   */
   const reloadFrom = useCallback((payload: BootstrapPayload) => {
     setConfigPath(payload.configPath);
     setConfig(payload.config);
@@ -83,6 +112,13 @@ export function useLauncher(): LauncherController {
     setWarnings(payload.warnings);
   }, []);
 
+  /**
+   * 重新探测 llama-server 能力，并用结果刷新参数表。
+   *
+   * 两种失败要分开看：`isErrorPayload` 是传输层失败（如找不到 exe，整次调用返回 `{ error }`）；
+   * `result.ok === false` 是探测跑通了但没解析出参数（此时 `failure` 有说明）。
+   * 后者仍要用返回的参数表（全部标为"未探测"），否则界面会停留在旧的支持情况上。
+   */
   const refreshSchema = useCallback(async () => {
     if (api === null) return;
     const result = await api.detect();
@@ -96,6 +132,9 @@ export function useLauncher(): LauncherController {
   }, [api]);
 
   // ---- 初始化：拉配置 + 订阅推送 + 探测能力 ----
+  // `disposed` 用于防止"请求还没回来组件就卸载/重挂"造成的过期 setState；
+  // 订阅的清理函数同样在卸载时执行，因此 React StrictMode 的双次调用是安全的
+  // （不会留下两份监听，日志也就不会重复）。
   useEffect(() => {
     if (api === null) {
       setReady(true);
@@ -144,6 +183,8 @@ export function useLauncher(): LauncherController {
   }, [api, reloadFrom, refreshSchema]);
 
   // ---- 配置变化 → 防抖后重拼命令行 ----
+  // busy 不为空时（正在启动/停止/保存）先不重拼：那期间配置本来就不会变，
+  // 少发一次 IPC，也避免与启动流程抢时序。
   useEffect(() => {
     if (api === null || config === null || busy !== null) return;
     const handle = setTimeout(() => {
@@ -165,6 +206,8 @@ export function useLauncher(): LauncherController {
   }, [api, config, busy]);
 
   // ---- 运行时轮询状态（含 /health）----
+  // 只在进程确实在跑时轮询；轮询失败被静默忽略（下一次轮询会再试，
+  // 不必因为一次抖动就在界面上弹错误）。
   useEffect(() => {
     if (api === null || status?.running !== true) return;
     const handle = setInterval(() => {
@@ -173,6 +216,15 @@ export function useLauncher(): LauncherController {
     return () => clearInterval(handle);
   }, [api, status?.running]);
 
+  /**
+   * 动作的统一包装：置忙 → 清旧错误 → 执行 → 捕获异常 → 解除忙碌。
+   *
+   * 好处是每个动作只需写"成功路径"，异常与忙碌状态的收尾不会漏；
+   * `label` 会显示在状态栏上（"进行中：start"），让用户知道卡在哪一步。
+   *
+   * @param label 动作名，用于界面提示
+   * @param fn 实际要执行的操作；抛出的异常会被转成 `error` 展示，不会冒泡
+   */
   const run = useCallback(async (label: string, fn: () => Promise<void>) => {
     setBusy(label);
     setError(null);
@@ -185,10 +237,21 @@ export function useLauncher(): LauncherController {
     }
   }, []);
 
+  /**
+   * 局部更新配置（表单每次改动都走它）。
+   *
+   * @param patch 要覆盖的字段；配置还没加载完（`null`）时什么也不做
+   */
   const update = useCallback((patch: Partial<LauncherConfig>) => {
     setConfig((prev) => (prev === null ? prev : { ...prev, ...patch }));
   }, []);
 
+  /**
+   * 启动服务。
+   *
+   * 结果同时喂给三处：`lastStart`（失败时要展示诊断结论）、`preview`（端口顺延后命令可能变了）、
+   * `status`（刷新状态栏）。**失败不抛异常** —— 主进程把"起不来"编码在载荷里返回。
+   */
   const start = useCallback(
     () =>
       run("start", async () => {
@@ -206,6 +269,7 @@ export function useLauncher(): LauncherController {
     [api, config, run],
   );
 
+  /** 停止服务并刷新状态（停止本身不返回业务信息，只需要最新状态） */
   const stop = useCallback(
     () =>
       run("stop", async () => {
@@ -216,6 +280,12 @@ export function useLauncher(): LauncherController {
     [api, run],
   );
 
+  /**
+   * 打开另一个配置文件。
+   *
+   * 用户取消（`canceled`）视为什么都没发生；换配置后要重探一次能力 ——
+   * 新配置的 `llama_dir` 可能与当前不同，参数表必须跟着换。
+   */
   const openConfig = useCallback(
     () =>
       run("openConfig", async () => {
@@ -228,6 +298,7 @@ export function useLauncher(): LauncherController {
     [api, refreshSchema, reloadFrom, run],
   );
 
+  /** 保存到当前配置文件；保存会重新归一化，所以要用返回的告警刷新提醒区 */
   const save = useCallback(
     () =>
       run("save", async () => {
@@ -239,6 +310,7 @@ export function useLauncher(): LauncherController {
     [api, config, run],
   );
 
+  /** 另存为：只有真的写盘成功才把界面上的配置路径切过去（取消则保持原路径） */
   const saveAs = useCallback(
     () =>
       run("saveAs", async () => {
@@ -249,6 +321,12 @@ export function useLauncher(): LauncherController {
     [api, config, run],
   );
 
+  /**
+   * 导入原版启动器 v1.9 的配置。
+   *
+   * 迁移失败时主进程不会抛错，而是返回当前状态 + 一条含原因的 warning，
+   * 所以这里照常刷新即可（用户能在提醒区看到"迁移失败：..."）。
+   */
   const migrate = useCallback(
     () =>
       run("migrate", async () => {
@@ -262,6 +340,7 @@ export function useLauncher(): LauncherController {
     [api, refreshSchema, reloadFrom, run],
   );
 
+  /** 用系统浏览器打开 llama-server 自带的 WebUI（地址由主进程按实际端口推导） */
   const openWebUi = useCallback(
     () =>
       run("openWebUi", async () => {
@@ -272,6 +351,13 @@ export function useLauncher(): LauncherController {
     [api, run],
   );
 
+  /**
+   * 弹系统对话框选一个路径，选中后写回配置的对应字段。
+   *
+   * @param key 配置字段名（如 `main_model`、`models_dir`）
+   * @param kind 选择类型，决定对话框是选文件还是选目录、以及文件过滤器
+   * @param title 对话框标题（可选）
+   */
   const pick = useCallback(
     (key: string, kind: PickKind, title?: string) =>
       run("pick", async () => {
@@ -288,7 +374,9 @@ export function useLauncher(): LauncherController {
     [api, config, run, update],
   );
 
+  /** 清空界面上的日志（只影响展示，主进程的诊断缓冲不动） */
   const clearLogs = useCallback(() => setLogs([]), []);
+  /** 关掉顶部的错误横幅 */
   const dismissError = useCallback(() => setError(null), []);
 
   return {

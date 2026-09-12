@@ -24,8 +24,20 @@ import { baseUrlOf, fetchHealth, findFreePort, probeTcp } from "./core/health.ts
 import { classify } from "./core/logLines.ts";
 import type { LauncherConfig } from "./core/types.ts";
 
+/** 解析后的命令行开关：有值的是字符串，纯开关是 `true` */
 type Flags = Record<string, string | true>;
 
+/**
+ * 解析命令行开关（手写，不引第三方库以维持零依赖）。
+ *
+ * 支持两种写法：`--key value` 与 `--key=value`；没有跟随值的 `--flag` 记为 `true`。
+ *
+ * 边界：判断"后面那个是不是值"的依据是它**不以 `--` 开头** ——
+ * 因此值本身不能以 `--` 开头（本 CLI 用不到这种情况，如确实需要请用 `--key=--value`）。
+ *
+ * @param argv 去掉 `node` 与脚本路径、且已剔除子命令名之后的参数
+ * @returns `positional` 为位置参数，`flags` 为开关表
+ */
 function parseFlags(argv: string[]): { positional: string[]; flags: Flags } {
   const positional: string[] = [];
   const flags: Flags = {};
@@ -53,22 +65,46 @@ function parseFlags(argv: string[]): { positional: string[]; flags: Flags } {
   return { positional, flags };
 }
 
+/**
+ * 取字符串形态的开关值。
+ *
+ * @param flags 开关表
+ * @param name 开关名（不含 `--`）
+ * @returns 开关的值；不存在、或只是纯开关（`true`）时返回 `null`
+ */
 function flagString(flags: Flags, name: string): string | null {
   const v = flags[name];
   return typeof v === "string" ? v : null;
 }
 
+/** 默认配置文件路径：当前工作目录下的 `llama-launcher.json` */
 function defaultConfigPath(): string {
   return join(process.cwd(), "llama-launcher.json");
 }
 
+/** {@link loadConfigForCli} 的返回值 */
 interface LoadedConfig {
+  /** 归一化后的配置 */
   config: LauncherConfig;
+  /** 实际读取的路径（可能只是"打算用的默认路径"，见 `existed`） */
   path: string;
+  /** 归一化过程中的告警，需要在界面上展示给用户 */
   warnings: string[];
+  /** 该文件是否真实存在；`false` 表示用的是默认配置 */
   existed: boolean;
 }
 
+/**
+ * 读配置：文件不存在时退回默认配置而不是报错。
+ *
+ * 为什么容忍"文件不存在"：首次使用时配置文件自然还不存在，
+ * 此时应该能用默认参数跑起来（并提示用户），而不是甩一个 ENOENT。
+ * 若文件不存在还会顺手探测一次 llama.cpp 目录，让默认配置尽量可用。
+ *
+ * @param flags 命令行开关（只看 `--config`）
+ * @returns 配置、路径、告警与"文件是否存在"，见 {@link LoadedConfig}
+ * @throws {Error} 文件存在但读不了或 JSON 非法时抛出（由 `loadConfigFile` 抛出）
+ */
 function loadConfigForCli(flags: Flags): LoadedConfig {
   const path = flagString(flags, "config") ?? defaultConfigPath();
   const warnings: string[] = [];
@@ -82,7 +118,16 @@ function loadConfigForCli(flags: Flags): LoadedConfig {
   return { config: result.config, path, warnings: [...warnings, ...result.warnings], existed: true };
 }
 
-/** 探测用：优先 --llama-dir / --exe，其次配置，最后自动探测 */
+/**
+ * 为 `probe` 定出要探测的 exe 路径。
+ *
+ * 优先级：`--exe` → `--llama-dir` → 配置里的值 → 自动探测当前目录。
+ * 每一级都要求文件确实存在，不存在就继续往下找（而不是返回一个不存在的路径）。
+ *
+ * @param flags 命令行开关
+ * @param config 已读到的配置（`probe` 命令可能还没读配置，故可选）
+ * @returns exe 的完整路径；四级都落空时返回 `null`
+ */
 function resolveExeForProbe(flags: Flags, config?: LauncherConfig): string | null {
   const exeFlag = flagString(flags, "exe");
   if (exeFlag !== null && existsSync(exeFlag)) return exeFlag;
@@ -103,6 +148,7 @@ function resolveExeForProbe(flags: Flags, config?: LauncherConfig): string | nul
   return discovered === null ? null : join(discovered, "llama-server.exe");
 }
 
+/** 日志分类 → ANSI 颜色；未列出的分类不着色（`RESET` 用于关闭着色） */
 const COLOR: Record<string, string> = {
   error: "\x1b[31m",
   oom: "\x1b[41;97m",
@@ -117,6 +163,15 @@ const RESET = "\x1b[0m";
 // ---------------------------------------------------------------------------
 // probe
 // ---------------------------------------------------------------------------
+/**
+ * `probe`：探测当前 llama.cpp 支持哪些参数，并回答"哪些改了名 / 不支持 / 已废弃"。
+ *
+ * 两种数据来源：默认现场跑 `--version` + `--help`；给了 `--help-fixture` 则直接读文件
+ * （用于离线对拍，不需要真的装一个 llama.cpp）。
+ *
+ * @param flags 命令行开关：`--llama-dir` / `--exe` / `--help-fixture` / `--json`
+ * @returns 退出码：解析到选项为 `0`；找不到 exe 或一个选项都没解析出来为 `1`
+ */
 async function cmdProbe(flags: Flags): Promise<number> {
   const exe = resolveExeForProbe(flags);
   if (exe === null) {
@@ -172,6 +227,15 @@ async function cmdProbe(flags: Flags): Promise<number> {
 // ---------------------------------------------------------------------------
 // args
 // ---------------------------------------------------------------------------
+/**
+ * `args`：只打印"最终命令行 + 参数决策表"，**不启动任何进程**。
+ *
+ * 这是与界面/旧脚本对拍用的命令：同一份配置，这里输出的命令行必须与界面里
+ * 显示、以及实际启动时用的一致。`--json` 输出可直接喂给别的脚本做断言。
+ *
+ * @param flags 命令行开关：`--config` / `--help-fixture` / `--port` / `--json`
+ * @returns 退出码：恒为 `0`（拼装失败会抛异常，由顶层统一转成 `1`）
+ */
 async function cmdArgs(flags: Flags): Promise<number> {
   const loaded = loadConfigForCli(flags);
   const portFlag = flagString(flags, "port");
@@ -225,6 +289,20 @@ async function cmdArgs(flags: Flags): Promise<number> {
 // ---------------------------------------------------------------------------
 // run
 // ---------------------------------------------------------------------------
+/**
+ * `run`：真正启动 llama-server，流式打印日志。
+ *
+ * 行为要点：
+ * - 端口被占用时自动顺延，并同步改写命令行里的 `--port`
+ * - `SIGINT` / `SIGTERM` 都接了停止逻辑（用 `stopping` 标志防重复），
+ *   保证 Ctrl+C 后不会留下占着显存的孤儿进程
+ * - 启动失败时打印诊断结论（显存不足 / 端口占用等）并返回退出码 `1`
+ * - `--timeout-ms` 用于无人值守的冒烟测试：到点自动停止，不必等人按 Ctrl+C
+ * - 不给 `--timeout-ms` 时会一直阻塞等 Ctrl+C（这是给人用的正常模式）
+ *
+ * @param flags 命令行开关：`--config` / `--port` / `--open` / `--timeout-ms`
+ * @returns 退出码：成功 `0`，启动失败 `1`
+ */
 async function cmdRun(flags: Flags): Promise<number> {
   const loaded = loadConfigForCli(flags);
   const prepared = await prepareLaunch(loaded.config);
@@ -317,6 +395,17 @@ async function cmdRun(flags: Flags): Promise<number> {
 // ---------------------------------------------------------------------------
 // init / migrate
 // ---------------------------------------------------------------------------
+/**
+ * `init`：按当前机器的实际情况生成一份可直接用的配置。
+ *
+ * 自动完成三件事：探测 llama.cpp 目录（决定 `llama_dir`）、找同级的 `models` 目录与
+ * `presets.ini`（决定 `mode` 与 `models_dir` / `models_preset`）、
+ * 读 presets 的 `[defaults]` 约定决定是否预加载 —— 生成的配置与既有脚本的行为保持一致。
+ *
+ * @param flags 命令行开关：`--config` / `--llama-dir` / `--force`
+ * @returns 退出码：写入成功 `0`；文件已存在且没给 `--force` 时 `1`（不覆盖用户配置）
+ * @throws {Error} 目标路径不可写时由 `saveConfigFile` 抛出
+ */
 function cmdInit(flags: Flags): number {
   const path = flagString(flags, "config") ?? defaultConfigPath();
   if (existsSync(path) && flags["force"] !== true) {
@@ -358,6 +447,16 @@ function cmdInit(flags: Flags): number {
   return 0;
 }
 
+/**
+ * `migrate`：把原版启动器 v1.9 的配置迁移成新格式。
+ *
+ * 输出路径默认落在源文件同目录的 `llama-launcher.json`（可用 `--to` 覆盖），
+ * 不覆盖源文件；迁移后打印关键项供用户核对（尤其是 `context` 的单位换算结果）。
+ *
+ * @param flags 命令行开关：`--from`（必填）、`--to`
+ * @returns 退出码：成功 `0`；没给 `--from` 时 `1`
+ * @throws {Error} 源文件读不到或不是合法 JSON 时抛出（由 `readFileSync` / `JSON.parse` 抛出）
+ */
 function cmdMigrate(flags: Flags): number {
   const from = flagString(flags, "from");
   if (from === null) {
@@ -397,6 +496,10 @@ function printHelp(): void {
 `);
 }
 
+// ---------------------------------------------------------------------------
+// 入口：派发子命令并统一处理退出码
+//   - 子命令自己返回退出码（0 成功 / 1 失败），便于脚本串联
+//   - 抛出的异常在这里统一转成"人话 + 退出码 1"，不打印堆栈（对使用者没用）
 // ---------------------------------------------------------------------------
 const argv = process.argv.slice(2);
 const command = argv[0] ?? "help";

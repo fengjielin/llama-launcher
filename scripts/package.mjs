@@ -82,6 +82,63 @@ const MIRROR_MARKER = path.join(ELECTRON_DIST_MIRROR, ".llama-mirror-source");
 const ARTIFACT_PREFIX = "llama-launcher-";
 
 /**
+ * 产物目录里"跑过应用就会生成"的文件。
+ *
+ * 打包前会清空 `win-unpacked`，而**用户很可能就是在这里直接运行 exe**（便携版设计如此：
+ * 配置与数据都放在 exe 旁边）。清掉它们等于把用户的配置一起删了 —— 应用下次启动会重新
+ * 探测并生成一份默认配置，于是出现"我明明改过的值怎么又变回去了"。
+ * 实测踩过：把预加载模型、每模型的 ctx / 输出上限都改好之后重建一次，产物里那份配置
+ * 被清掉、应用重新生成，命令又回到了旧值（`-c 16384 -n 8192`），而项目根目录的配置
+ * 打包版根本不读。
+ *
+ * 所以这些文件在清理前先记下来，构建成功后原样放回。
+ */
+const RUNTIME_FILES = ["llama-launcher.json", path.join("data", "llama-launcher-settings.json")];
+
+/**
+ * 把产物目录里已有的运行时文件读进内存（构建后放回）。
+ *
+ * @param {string} appOutDir 产物目录（`<输出>/win-unpacked`）
+ * @returns {Array<{rel: string, text: string}>} 记下的文件（可能为空）
+ */
+function snapshotRuntimeFiles(appOutDir) {
+  const kept = [];
+  for (const rel of RUNTIME_FILES) {
+    const abs = path.join(appOutDir, rel);
+    try {
+      if (fs.existsSync(abs)) kept.push({ rel, text: fs.readFileSync(abs, "utf8") });
+    } catch {
+      // 读不出来就算了：这只是"尽量别删用户的东西"，不该阻断打包
+    }
+  }
+  return kept;
+}
+
+/**
+ * 把记下的运行时文件放回新产物目录（已存在的不覆盖 —— 以用户当前的为准）。
+ *
+ * @param {string} appOutDir 新的产物目录
+ * @param {Array<{rel: string, text: string}>} kept {@link snapshotRuntimeFiles} 的结果
+ * @returns {string[]} 实际放回的文件（相对路径）
+ */
+function restoreRuntimeFiles(appOutDir, kept) {
+  const restored = [];
+  for (const { rel, text } of kept) {
+    const abs = path.join(appOutDir, rel);
+    try {
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      if (!fs.existsSync(abs)) {
+        fs.writeFileSync(abs, text, "utf8");
+        restored.push(rel);
+      }
+    } catch {
+      // 同上：放不回去只影响"要不要重新探测"，不影响产物本身
+    }
+  }
+  return restored;
+}
+
+/**
  * 按需打印一行进度。
  * @param {string} msg 要打印的内容（自带前缀）。
  */
@@ -327,6 +384,12 @@ function main() {
 
   const preferred = path.resolve(process.env.LLAMA_PACKAGE_OUT || path.join(ROOT, "dist"));
   say(`▸ 检查输出目录 ${path.relative(ROOT, preferred) || preferred}`);
+  // 清理之前先记下"跑过应用才会有的文件"，构建成功后放回（否则用户的配置会被一起删掉）
+  const keptRuntime = snapshotRuntimeFiles(path.join(preferred, APP_OUT_NAME));
+  if (keptRuntime.length > 0) {
+    say(`  · 发现上次运行留下的 ${keptRuntime.map((f) => f.rel).join("、")}，构建后会原样放回`);
+    say("    （便携版把配置放在 exe 旁边；如果打算长期在这里跑，建议把整个 win-unpacked 拷到别处）");
+  }
   const picked = prepareOutputDir(preferred);
   if (picked.fallback) explainFallback(preferred, picked.dir, picked.blocked);
   else say(`  · 已清理 ${path.relative(ROOT, path.join(picked.dir, APP_OUT_NAME)) || APP_OUT_NAME}（删除 ${picked.removed} 项）`);
@@ -353,6 +416,8 @@ function main() {
   }
 
   const exe = path.join(picked.dir, APP_OUT_NAME, "llama-launcher.exe");
+  const restored = restoreRuntimeFiles(path.join(picked.dir, APP_OUT_NAME), keptRuntime);
+  if (restored.length > 0) say(`  · 已放回：${restored.join("、")}（应用下次启动直接用它，不会重新探测）`);
   if (fs.existsSync(exe)) {
     const mb = (fs.statSync(exe).size / 1024 / 1024).toFixed(1);
     say(`\n✔ 打包完成：${exe}（${mb} MB）`);

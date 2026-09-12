@@ -9,6 +9,9 @@ llama-launcher.json
 *.log
 *.local.json
 
+# 配置档案：是用户自己的机器与模型路径，不入库
+profiles/
+
 # 编辑器
 .vscode/
 .idea/

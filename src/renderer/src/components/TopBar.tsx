@@ -41,8 +41,13 @@ export function TopBar({ launcher }: { launcher: LauncherController }) {
         <Button onClick={() => void launcher.saveAs()} disabled={busy !== null || config === null}>
           另存为
         </Button>
-        <Button variant="primary" onClick={() => void launcher.refreshSchema()} disabled={busy !== null} title="重新跑 llama-server --version/--help">
-          重新探测
+        <Button
+          variant="primary"
+          onClick={() => void launcher.reprobe()}
+          disabled={busy !== null}
+          title="重新跑 llama-server --version/--help，刷新参数表与自检"
+        >
+          {busy === "重新探测" ? "探测中…" : "重新探测"}
         </Button>
       </div>
     </header>

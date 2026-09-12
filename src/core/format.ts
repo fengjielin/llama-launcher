@@ -24,6 +24,36 @@ export function formatMiB(mib: number | null, digits = 1): string {
 }
 
 /**
+ * 把一次能力探测的结果汇成一句话（顶栏「重新探测」完成后的提示用的）。
+ *
+ * 单独抽成纯函数的理由：这段文案是"点了按钮到底有没有生效"的唯一反馈，
+ * 值得被单测钉住（尤其是失败时不能显示成成功的样子）。
+ *
+ * @param input 探测结果的关键数字与耗时；`failure` 只在 `ok` 为 false 时有意义
+ * @returns 一句话摘要，例如 `重新探测完成：b10488 · 248 个参数 · 改名 0 / 不支持 0 / 废弃 2 · 用时 0.4s`
+ */
+export function summarizeDetect(input: {
+  ok: boolean;
+  build: number | null;
+  optionCount: number;
+  renamed: number;
+  unsupported: number;
+  deprecated: number;
+  failure?: string | undefined;
+  elapsedMs: number;
+}): string {
+  const seconds = `${(input.elapsedMs / 1000).toFixed(1)}s`;
+  if (!input.ok) {
+    return `重新探测未完成：${input.failure ?? "没能解析出参数表"}（用时 ${seconds}）`;
+  }
+  const version = input.build === null ? "版本未知" : `b${input.build}`;
+  return (
+    `重新探测完成：${version} · ${input.optionCount} 个参数 · ` +
+    `改名 ${input.renamed} / 不支持 ${input.unsupported} / 废弃 ${input.deprecated} · 用时 ${seconds}`
+  );
+}
+
+/**
  * 把字节数换算成 MiB（四舍五入）。
  *
  * @param bytes 字节数

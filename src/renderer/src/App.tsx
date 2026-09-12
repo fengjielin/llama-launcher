@@ -75,6 +75,16 @@ pnpm build && pnpm start   # 构建后运行</pre>
     <div className="flex h-full flex-col">
       <TopBar launcher={launcher} />
 
+      {launcher.flash !== null ? (
+        <div className="flex shrink-0 items-center gap-2 border-b border-sky-900/50 bg-sky-950/30 px-4 py-1.5">
+          <Badge tone="sky">完成</Badge>
+          <span className="min-w-0 flex-1 text-xs text-sky-100">{launcher.flash}</span>
+          <Button variant="ghost" onClick={launcher.dismissFlash}>
+            知道了
+          </Button>
+        </div>
+      ) : null}
+
       {launcher.error !== null ? (
         <div className="flex shrink-0 items-center gap-2 border-b border-rose-900/50 bg-rose-950/30 px-4 py-1.5">
           <Badge tone="rose">出错</Badge>

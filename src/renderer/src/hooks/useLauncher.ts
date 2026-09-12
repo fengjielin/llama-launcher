@@ -1,14 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getApi } from "../api.ts";
 import type { LauncherConfig } from "../../../core/types.ts";
 import type { ProfileInfo } from "../../../core/profiles.ts";
 import type { PrecheckReport } from "../../../core/precheck.ts";
 import { isErrorPayload } from "../../../shared/ipc.ts";
+import { summarizeDetect } from "../../../core/format.ts";
 import type {
   AppSettings,
   AppSettingsPayload,
   BootstrapPayload,
   DetectPayload,
+  ErrorPayload,
   LogPush,
   MetricsPayload,
   PathSuggestions,
@@ -63,7 +65,8 @@ export interface LauncherController {
   /** 环境自检报告（驱动/CUDA 运行时/模型/端口） */
   precheck: PrecheckReport | null;
   update: (patch: Partial<LauncherConfig>) => void;
-  refreshSchema: () => Promise<void>;
+  /** 重新探测能力并刷新参数表；返回值供调用方汇总结果（例如「重新探测」按钮） */
+  refreshSchema: () => Promise<DetectPayload | ErrorPayload | null>;
   /** 强制重跑环境自检（忽略主进程侧的缓存） */
   runPrecheckNow: () => Promise<void>;
   start: () => Promise<void>;
@@ -73,6 +76,12 @@ export interface LauncherController {
   saveAs: () => Promise<void>;
   /** 从 presets.ini 导入模型预设到配置（预设以配置里的 presets 字段为准） */
   importPresets: () => Promise<void>;
+  /** 重新跑 llama-server --version/--help：带进度与结果提示（否则"点了看不出变化"） */
+  reprobe: () => Promise<void>;
+  /** 一闪而过的操作结果（如"重新探测完成：…"），6 秒后自动消失 */
+  flash: string | null;
+  /** 手动关掉那条一闪而过的提示 */
+  dismissFlash: () => void;
   openWebUi: () => Promise<void>;
   pick: (key: string, kind: PickKind, title?: string) => Promise<void>;
   clearLogs: () => void;
@@ -138,6 +147,15 @@ export function useLauncher(): LauncherController {
   const [profilesDir, setProfilesDir] = useState("");
   const [settings, setSettings] = useState<AppSettingsPayload | null>(null);
   const [precheck, setPrecheck] = useState<PrecheckReport | null>(null);
+  /**
+   * 一闪而过的操作结果（例如"重新探测完成：b10488 · 248 个参数…"）。
+   *
+   * 存在的理由：有些操作"成功了但界面看不出变化"（重新探测同一份 llama.cpp 就是这样），
+   * 没有反馈时用户会当成按钮坏了。这条提示会自动消失（见 {@link flashMessage}）。
+   */
+  const [flash, setFlash] = useState<string | null>(null);
+  /** flash 的定时器句柄：连续操作时只保留最后一条 */
+  const flashTimer = useRef<number | null>(null);
   /** 主进程探测到的、可一键填入的路径（空串表示没探到） */
   const [suggestions, setSuggestions] = useState<PathSuggestions>({ modelsDir: "", presetPath: "", mainModel: "" });
 
@@ -166,17 +184,30 @@ export function useLauncher(): LauncherController {
    * `result.ok === false` 是探测跑通了但没解析出参数（此时 `failure` 有说明）。
    * 后者仍要用返回的参数表（全部标为"未探测"），否则界面会停留在旧的支持情况上。
    */
-  const refreshSchema = useCallback(async () => {
-    if (api === null) return;
+  const refreshSchema = useCallback(async (): Promise<DetectPayload | ErrorPayload | null> => {
+    if (api === null) return null;
     const result = await api.detect();
     if (isErrorPayload(result)) {
       setDetectError(result.error);
-      return;
+      return result;
     }
     setDetect(result);
     setSchema(result.schema);
     setDetectError(result.ok ? null : (result.failure ?? null));
+    return result;
   }, [api]);
+
+  /**
+   * 显示一条"一闪而过"的操作结果，默认 6 秒后自动消失。
+   *
+   * @param text 要显示的文案；传 `null` 表示立刻清掉（例如用户点了关闭）
+   */
+  const flashMessage = useCallback((text: string | null) => {
+    if (flashTimer.current !== null) window.clearTimeout(flashTimer.current);
+    setFlash(text);
+    flashTimer.current =
+      text === null ? null : window.setTimeout(() => setFlash(null), 6000);
+  }, []);
 
   /** 重新拉档案列表（保存/删除之后调用，保证列表与磁盘一致） */
   const refreshProfiles = useCallback(async () => {
@@ -308,6 +339,45 @@ export function useLauncher(): LauncherController {
   }, []);
 
   /**
+   * 用户主动点「重新探测」：包一层进度与结果反馈。
+   *
+   * 为什么需要这个包装：`refreshSchema()` 本身不设 `busy`、也不报结果，而重新探测同一份
+   * llama.cpp 得到的参数表**与上次一模一样** —— 于是点了按钮界面上一点变化都没有，
+   * 看起来就像"按钮无效"（实测：探测确实跑了 367ms，但状态栏与顶栏文案一字未变）。
+   * 所以这里做两件事：走 `run()` 让状态栏显示"进行中"、结束后给一条带结果摘要的提示。
+   */
+  const reprobe = useCallback(
+    () =>
+      run("重新探测", async () => {
+        if (api === null) return;
+        const started = Date.now();
+        const result = await refreshSchema();
+        const ms = Date.now() - started;
+        if (result === null) return;
+        if (isErrorPayload(result)) {
+          // 传输层失败：原因已经进了 detectError（顶栏会显示"能力探测失败"），这里再补一条
+          flashMessage("重新探测失败：见顶栏的「能力探测失败」");
+          return;
+        }
+        flashMessage(
+          summarizeDetect({
+            ok: result.ok,
+            build: result.build,
+            optionCount: result.optionCount,
+            renamed: result.renamed.length,
+            unsupported: result.unsupported.length,
+            deprecated: result.deprecated.length,
+            failure: result.failure,
+            elapsedMs: ms,
+          }),
+        );
+        // 换了 llama.cpp 目录/版本后，自检结论（后端构成、运行时 DLL、模型体积）也该重算
+        setPrecheck(await api.precheck(true));
+      }),
+    [api, refreshSchema, run, flashMessage],
+  );
+
+  /**
    * 局部更新配置（表单每次改动都走它）。
    *
    * @param patch 要覆盖的字段；配置还没加载完（`null`）时什么也不做
@@ -351,21 +421,51 @@ export function useLauncher(): LauncherController {
   );
 
   /**
-   * 打开另一个配置文件。
+   * 保存到当前配置文件；保存会重新归一化，所以要用返回的告警刷新提醒区。
    *
-   * 用户取消（`canceled`）视为什么都没发生；换配置后要重探一次能力 ——
-   * 新配置的 `llama_dir` 可能与当前不同，参数表必须跟着换。
+   * 顺带回一条完成提示：没有告警时"保存"在界面上同样看不出变化
+   * （与「重新探测」是同一类坑）。
    */
+  const save = useCallback(
+    () =>
+      run("保存", async () => {
+        if (api === null || config === null) return;
+        const result = await api.saveConfig(config);
+        setWarnings(result.warnings);
+        setError(null);
+        flashMessage(
+          `已保存配置：${result.path}` +
+            (result.warnings.length > 0 ? `（${result.warnings.length} 条提醒见下方 ⚠）` : ""),
+        );
+      }),
+    [api, config, run, flashMessage],
+  );
+
+  /** 另存为：只有真的写盘成功才把界面上的配置路径切过去（取消则保持原路径） */
+  const saveAs = useCallback(
+    () =>
+      run("另存为", async () => {
+        if (api === null || config === null) return;
+        const result = await api.saveConfigAs(config);
+        if (result.canceled || result.path === null) return;
+        setConfigPath(result.path);
+        flashMessage(`已另存为：${result.path}`);
+      }),
+    [api, config, run, flashMessage],
+  );
+
+  /** 打开另一个配置文件：成功也给一条提示（同上，否则界面可能看不出变化） */
   const openConfig = useCallback(
     () =>
-      run("openConfig", async () => {
+      run("打开配置", async () => {
         if (api === null) return;
         const result = await api.openConfig();
         if (result.canceled || result.payload === null) return;
         reloadFrom(result.payload);
+        flashMessage(`已打开配置：${result.payload.configPath}`);
         await refreshSchema();
       }),
-    [api, refreshSchema, reloadFrom, run],
+    [api, refreshSchema, reloadFrom, run, flashMessage],
   );
 
   /**
@@ -376,38 +476,16 @@ export function useLauncher(): LauncherController {
    */
   const importPresets = useCallback(
     () =>
-      run("importPresets", async () => {
+      run("导入预设", async () => {
         if (api === null) return;
         const result = await api.importPresets();
         if (result.canceled) return;
         if (result.payload !== null) reloadFrom(result.payload);
         if (result.warnings.length > 0) setWarnings(result.warnings);
+        flashMessage(`已导入预设：${result.path ?? "（未知文件）"}`);
         await refreshSchema();
       }),
-    [api, refreshSchema, reloadFrom, run],
-  );
-
-  /** 保存到当前配置文件；保存会重新归一化，所以要用返回的告警刷新提醒区 */
-  const save = useCallback(
-    () =>
-      run("save", async () => {
-        if (api === null || config === null) return;
-        const result = await api.saveConfig(config);
-        setWarnings(result.warnings);
-        setError(null);
-      }),
-    [api, config, run],
-  );
-
-  /** 另存为：只有真的写盘成功才把界面上的配置路径切过去（取消则保持原路径） */
-  const saveAs = useCallback(
-    () =>
-      run("saveAs", async () => {
-        if (api === null || config === null) return;
-        const result = await api.saveConfigAs(config);
-        if (!result.canceled && result.path !== null) setConfigPath(result.path);
-      }),
-    [api, config, run],
+    [api, refreshSchema, reloadFrom, run, flashMessage],
   );
 
   /** 用系统浏览器打开 llama-server 自带的 WebUI（地址由主进程按实际端口推导） */
@@ -458,6 +536,8 @@ export function useLauncher(): LauncherController {
   const clearLogs = useCallback(() => setLogs([]), []);
   /** 关掉顶部的错误横幅 */
   const dismissError = useCallback(() => setError(null), []);
+  /** 关掉"一闪而过"的结果提示 */
+  const dismissFlash = useCallback(() => flashMessage(null), [flashMessage]);
 
   /**
    * 开关实时指标采样。
@@ -570,6 +650,9 @@ export function useLauncher(): LauncherController {
     save,
     saveAs,
     importPresets,
+    reprobe,
+    flash,
+    dismissFlash,
     openWebUi,
     pick,
     clearLogs,

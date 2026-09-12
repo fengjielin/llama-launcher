@@ -510,6 +510,40 @@ export interface ModelLayout {
 }
 
 /**
+ * 解析"这次启动真正会加载哪个模型文件"。
+ *
+ * 规则（顺序有意义）：
+ * 1. **router 模式**：优先 `preload_model`（配合 `models_dir` 拼路径）—— 它俩才是 router 的模型来源；
+ *    没配预加载就没有"启动即加载"的模型，返回 `null`
+ * 2. **single 模式**：先看 `main_model`；**留空时退回 `preload_model` + `models_dir`**
+ *    —— 这两个字段描述的是同一件事"要跑哪个模型"，配置里既然写了模型名，
+ *    就不该再逼用户填一遍完整路径
+ *
+ * @param config 启动配置（只用到模式、主模型、预加载模型与模型目录四个字段）
+ * @param options.mustExist 为 true 时要求文件确实存在（界面给"填入"建议时用；
+ *   启动路径上另有一次存在性检查，好给出更具体的告警）
+ * @returns 模型文件路径；没有可用来源（或要求存在却找不到）时返回 `null`
+ */
+export function resolveModelFile(
+  config: Pick<LauncherConfig, "mode" | "main_model" | "preload_model" | "models_dir">,
+  options: { mustExist?: boolean } = {},
+): string | null {
+  const fromPreload =
+    typeof config.preload_model === "string" && config.preload_model !== "" && typeof config.models_dir === "string" && config.models_dir !== ""
+      ? join(config.models_dir, `${config.preload_model}.gguf`)
+      : null;
+
+  const candidate =
+    config.mode === "router"
+      ? fromPreload
+      : (typeof config.main_model === "string" && config.main_model !== "" ? config.main_model : fromPreload);
+
+  if (candidate === null) return null;
+  if (options.mustExist === true && !existsSync(candidate)) return null;
+  return candidate;
+}
+
+/**
  * 探测「模型相关的布局」：llama.cpp 目录 → 同级 models 目录 → presets.ini → 预加载模型。
  *
  * 为什么把这件事抽到 core：同一套规则原先只写在 CLI 的 `init` 里，而界面**首次运行生成配置**时

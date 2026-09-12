@@ -19,6 +19,7 @@
 
 import { existsSync, openSync, closeSync, readSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { resolveModelFile } from "./config.ts";
 import { queryGpus } from "./gpu.ts";
 import type { GpuQueryResult } from "./gpu.ts";
 import { probeTcp } from "./health.ts";
@@ -608,19 +609,14 @@ export async function runPrecheck(input: PrecheckInput): Promise<PrecheckReport>
 /**
  * 挑出"这次启动真正会加载的那个模型文件"。
  *
- * router 模式优先预加载模型，single 模式用主模型；两者都没配时返回 `null`。
+ * router 模式用预加载模型，single 模式用主模型（主模型留空时按 `preload_model` 兜底，
+ * 见 {@link resolveModelFile}）；都没有时返回 `null`。
  *
  * @param config 启动配置
  * @returns 模型绝对路径；未指定时为 `null`
  */
 export function pickModelPath(config: LauncherConfig): string | null {
-  if (config.mode === "router") {
-    if (typeof config.preload_model === "string" && config.preload_model !== "" && typeof config.models_dir === "string") {
-      return join(config.models_dir, `${config.preload_model}.gguf`);
-    }
-    return null;
-  }
-  return typeof config.main_model === "string" && config.main_model !== "" ? config.main_model : null;
+  return resolveModelFile(config);
 }
 
 /**

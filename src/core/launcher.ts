@@ -9,7 +9,7 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { buildArgs } from "./args.ts";
 import type { BuildStep } from "./types.ts";
-import { discoverLlamaDir, resolveServerExe } from "./config.ts";
+import { discoverLlamaDir, resolveModelFile, resolveServerExe } from "./config.ts";
 import type { LauncherConfig } from "./types.ts";
 import { createCapabilities, readBuildNumber } from "./helpProbe.ts";
 import type { Capabilities, ParamSpec } from "./types.ts";
@@ -266,7 +266,22 @@ export async function prepareLaunch(config: LauncherConfig, options: PrepareOpti
     }
   }
 
-  // ---- 5. 拼命令行 ----
+  // ---- 5. single 模式：主模型留空时按 preload_model 兜底 ----
+  // 配置里已经写了模型名（preload_model）时不该再逼用户填一遍完整路径。
+  let mainModelFile: string | null = null;
+  if (config.mode !== "router" && (config.main_model ?? "") === "") {
+    const derived = resolveModelFile(config);
+    if (derived !== null) {
+      if (existsSync(derived)) {
+        mainModelFile = derived;
+        warnings.push(`single 模式没指定主模型，已按配置里的 preload_model 使用：${derived}`);
+      } else {
+        warnings.push(`single 模式没指定主模型，按 preload_model 推出的文件不存在：${derived}`);
+      }
+    }
+  }
+
+  // ---- 6. 拼命令行 ----
   const build = buildArgs({
     config,
     caps,
@@ -274,6 +289,7 @@ export async function prepareLaunch(config: LauncherConfig, options: PrepareOpti
     preloadModelFile,
     preloadCtxFromPreset,
     presetArgPath,
+    mainModelFile,
     cpuOnly: options.cpuOnly ?? false,
   });
 

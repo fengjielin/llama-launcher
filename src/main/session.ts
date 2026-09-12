@@ -14,6 +14,7 @@ import {
   discoverModelLayout,
   loadConfigFile,
   normalizeConfig,
+  resolveModelFile,
   resolveServerExe,
   saveConfigFile,
 } from "../core/config.ts";
@@ -253,7 +254,7 @@ export class LauncherSession {
    *
    * @returns `modelsDir` / `presetPath`，没探到的为空串
    */
-  private pathSuggestions(): { modelsDir: string; presetPath: string } {
+  private pathSuggestions(): { modelsDir: string; presetPath: string; mainModel: string } {
     const layout = discoverModelLayout({
       startDirs: this.searchStartDirs(),
       explicitLlamaDir: this.config.llama_dir !== "" ? this.config.llama_dir : null,
@@ -261,6 +262,8 @@ export class LauncherSession {
     return {
       modelsDir: layout.modelsDirExists ? layout.modelsDirCandidate : "",
       presetPath: layout.presetPath,
+      // single 模式主模型留空时，配置里的 preload_model + models_dir 就是个现成答案（文件确实在才给）
+      mainModel: resolveModelFile(this.config, { mustExist: true }) ?? "",
     };
   }
 

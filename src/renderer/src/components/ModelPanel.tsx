@@ -214,7 +214,9 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
             label="主模型（-m）"
             value={typeof config.main_model === "string" ? config.main_model : ""}
             placeholder="点「浏览…」选择 .gguf"
-            hint="单模型模式：这个模型直接由命令行启动（分片模型选第一个分片即可）"
+            hint="留空时会用配置里的 preload_model（配合模型目录）自动推出，所以这里不填也能跑；填了就以这里为准"
+            suggestion={suggestions.mainModel}
+            onUseSuggestion={(path) => update({ main_model: path })}
             onPick={() => void pick("main_model", "gguf", "选择主模型")}
             onChange={(next) => update({ main_model: next ?? "" })}
           />

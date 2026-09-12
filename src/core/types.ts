@@ -277,6 +277,13 @@ export interface BuildInput {
   presetKeys?: readonly string[];
   /** 已解析出的预加载模型绝对路径；null = 不预加载 */
   preloadModelFile?: string | null;
+  /**
+   * single 模式主模型留空时，调用方按 `preload_model` + `models_dir` 推出的路径。
+   *
+   * 配置里既然写了模型名，就不该再逼用户填一遍完整路径；`buildArgs` 本身不做文件操作，
+   * 所以由调用方解析好放进来。
+   */
+  mainModelFile?: string | null;
   /** 预加载模型在配置预设里的 ctx-size（实测预加载时 preset 不生效，需 CLI 直传） */
   preloadCtxFromPreset?: number | null;
   /**

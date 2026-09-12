@@ -52,6 +52,22 @@ function pair(argv: readonly string[], flag: string): string[] {
 // ---------------------------------------------------------------------------
 const PRESET_KEYS = ["ctx-size", "cache-type-k", "cache-type-v", "fit-target", "load-mode", "threads", "temperature"];
 
+test("single 模式：没有主模型但有 preload_model 兜底时，-m 用兜底路径", () => {
+  const r = build(
+    base({ mode: "single", main_model: undefined, models_dir: "E:\\Code\\llama\\models", preload_model: "Qwen3" }),
+    { mainModelFile: "E:\\Code\\llama\\models\\Qwen3.gguf" },
+  );
+  assert.deepEqual(pair(r.argv, "-m"), ["-m", "E:\\Code\\llama\\models\\Qwen3.gguf"]);
+  assert.equal(r.steps.find((s) => s.key === "main_model")?.reason, "cli");
+  assert.equal(r.warnings.some((w) => w.includes("没有指定主模型")), false, "有兜底就不该再报缺主模型");
+});
+
+test("single 模式：主模型与兜底都没有 → 仍然明确的告警", () => {
+  const r = build(base({ mode: "single", main_model: undefined }));
+  assert.equal(r.argv.includes("-m"), false);
+  assert.ok(r.warnings.some((w) => w.includes("single 模式但没有指定主模型")), r.warnings.join(" | "));
+});
+
 test("single 模式：完整命令行（黄金用例，逐字节对拍）", () => {
   const r = build(base());
   assert.deepEqual(r.argv, [

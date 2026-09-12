@@ -125,6 +125,11 @@ export interface PathSuggestions {
   modelsDir: string;
   /** 探测到的 `presets.ini` 完整路径（存在才有值，否则空串） */
   presetPath: string;
+  /**
+   * single 模式主模型的候选：配置里的 `preload_model` + `models_dir` 推出来的路径
+   * （文件确实存在才有值）。主模型留空时界面用它显示「填入探测值」。
+   */
+  mainModel: string;
 }
 
 export interface DetectPayload {

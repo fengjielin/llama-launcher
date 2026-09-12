@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { DEFAULT_CONFIG, loadConfigFile, normalizeConfig, normalizeThink, saveConfigFile } from "../core/config.ts";
+import {
+  DEFAULT_CONFIG,
+  loadConfigFile,
+  normalizeConfig,
+  normalizeThink,
+  resolveModelFile,
+  saveConfigFile,
+} from "../core/config.ts";
 
 /** 一份"手写风格"的配置：含 K 写法的 context、额外未知键、显式采样值 */
 const handwrittenConfig = {
@@ -69,6 +76,53 @@ test("归一化：未知键原样保留、context 单位识别、采样显式值
 
   assert.ok(warnings.some((w) => w.includes("context=64")), warnings.join(" | "));
   assert.ok(warnings.some((w) => w.includes("draft-mtp")), "spec_type 需要草稿模型但没有 → 要告警");
+});
+
+test("resolveModelFile：single 模式主模型留空时按 preload_model 兜底", () => {
+  const base = { llama_dir: "E:\\Code\\llama\\llama.cpp", models_dir: "E:\\Code\\llama\\models" };
+
+  // 主模型写了就用它
+  assert.equal(
+    resolveModelFile({ ...base, mode: "single", main_model: "E:\\m\\explicit.gguf", preload_model: "默认模型" }),
+    "E:\\m\\explicit.gguf",
+  );
+  // 留空则用 preload_model + models_dir 拼出来（这就是"从 JSON 里读"）
+  assert.equal(
+    resolveModelFile({ ...base, mode: "single", preload_model: "Qwen3.8-27B-Uncensored-IQ4_XS" }),
+    join("E:\\Code\\llama\\models", "Qwen3.8-27B-Uncensored-IQ4_XS.gguf"),
+  );
+  // 两处都没有 → null（调用方据此告警）
+  assert.equal(resolveModelFile({ ...base, mode: "single" }), null);
+  // 有 preload_model 但没有 models_dir 也拼不出来
+  assert.equal(resolveModelFile({ mode: "single", preload_model: "X" }), null);
+});
+
+test("resolveModelFile：router 模式只看预加载模型，不看 main_model", () => {
+  const config = {
+    mode: "router" as const,
+    models_dir: "E:\\models",
+    preload_model: "A",
+    main_model: "E:\\m\\随便.gguf",
+  };
+  assert.equal(resolveModelFile(config), join("E:\\models", "A.gguf"));
+  assert.equal(resolveModelFile({ ...config, preload_model: "" }), null, "router 没配预加载就没有要加载的模型");
+});
+
+test("resolveModelFile：mustExist 会真的去看文件在不在", () => {
+  const dir = mkdtempSync(join(tmpdir(), "llama-modelfile-"));
+  try {
+    writeFileSync(join(dir, "在的.gguf"), "", "utf8");
+    const config = { mode: "single" as const, models_dir: dir, preload_model: "在的" };
+    assert.equal(resolveModelFile(config), join(dir, "在的.gguf"), "默认不查存在性");
+    assert.equal(resolveModelFile(config, { mustExist: true }), join(dir, "在的.gguf"));
+    assert.equal(
+      resolveModelFile({ ...config, preload_model: "不在的" }, { mustExist: true }),
+      null,
+      "不存在时给不出建议",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("思考模式联动：采样默认值与生成上限", () => {

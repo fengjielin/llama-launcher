@@ -349,13 +349,21 @@ export function buildArgs(input: BuildInput): BuildResult {
       skipWhen: (v) => (typeof v === "number" && v <= 0 ? "已设为不限制" : null),
     });
   } else {
+    // 主模型留空时，调用方可以按 preload_model 兜底推出路径（见 config 的 resolveModelFile）
+    const mainValue = (config.main_model ?? "") !== "" ? config.main_model : (input.mainModelFile ?? undefined);
     emit({
       key: "main_model",
       label: "主模型",
       candidates: ["-m", "--model"],
-      value: config.main_model,
+      value: mainValue,
+      note:
+        mainValue !== undefined && (config.main_model ?? "") === ""
+          ? "主模型留空，按配置里的 preload_model 推出（详见告警）"
+          : undefined,
     });
-    if (!config.main_model) warnings.push("single 模式但没有指定主模型");
+    if (mainValue === undefined) {
+      warnings.push("single 模式但没有指定主模型（也没有 preload_model + models_dir 可以推算）");
+    }
   }
 
   // =========================================================== 5. 视觉 / 草稿模型

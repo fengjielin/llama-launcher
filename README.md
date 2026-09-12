@@ -137,12 +137,13 @@ llama-launcher/
 pnpm test          # 等价于 node src/test/run-tests.ts
 ```
 
-170 项测试覆盖：`--help` 解析（真实 fixture）、能力回退、preset 并集/单模型/非 ASCII/BOM、命令行拼装黄金用例、
+177 项测试覆盖：`--help` 解析（真实 fixture）、能力回退、preset 并集/单模型/非 ASCII/BOM、命令行拼装黄金用例、
 预加载覆盖规则、旧版本各回退分支、参数改名、配置迁移、上下文单位识别、行缓冲跨块、日志分类、失败诊断、
 `/health` 的 200/503 语义、端口顺延、GPU 采集解析（真实 `nvidia-smi` 输出）、CPU 差分、指标环形缓冲与序列化、
 档案 CRUD 与文件名安全化、PE 导入表解析（真实 `ggml-cuda.dll`）、环境自检各判定分支、数据落点三种情形、
 llama.cpp 目录的向上回溯探测（含层数上限与环境变量优先）、模型布局探测（models 目录 / presets.ini / 预加载）、
-关窗决策表（服务在跑 / 没跑 / 已开缩托盘 / 正在退出）、便携版应用目录的解析。
+关窗决策表（服务在跑 / 没跑 / 已开缩托盘 / 正在退出）、便携版应用目录的解析、
+单模型模式主模型的推算（preload_model + models_dir 兜底，含存在性检查）。
 
 > 为什么不用 `node --test`：那个运行器会为每个测试文件 spawn 子进程并把 stdio 接管道，在受限沙箱里直接
 > `EPERM`。`run-tests.ts` 改成在同一进程里 import 全部测试文件，`node:test` 照样自动执行并设置退出码 ——
@@ -254,9 +255,26 @@ pnpm build; node_modules\.bin\electron .
 - 预设里定义过的键，命令行不再重复传（preset 与命令行的优先级见上文「关键设计决策」第 4 条）。
 - 界面左栏显示"已为 N 个模型定义预设"+ 清单，不想手写 JSON 就点「导入 presets.ini…」把旧文件转进来
   （同名模型不覆盖，导入结果会写盘并给出通知）。
+- **单模型模式不吃预设**：`--models-preset` 只在 router 模式传，单模型模式下所有参数都由命令行决定
+  （界面文案也是这么写的）。所以单模型模式的「主模型」与 router 的「预加载模型」是两回事。
 
 老配置（只有 `models_preset` 路径、没有 `presets`）**打开时会自动导入**：读那个 ini、转成 JSON 预设留在内存里，
 并给出 ℹ 通知「点『保存』写入文件」。导入是一次性的补充动作，不会覆盖你已经调过的同名模型。
+
+#### 单模型模式的「主模型」可以留空
+
+`main_model`（主模型的完整路径）留空时，**自动按配置里的 `preload_model` + `models_dir` 推出路径**
+（`resolveModelFile()`，与 router 模式的预加载用的是同一套推算规则）。理由是这两个字段描述的是同一件事
+"要跑哪个模型" —— 配置里既然写了模型名，就不该再逼你填一遍路径。
+
+```
+⚠ single 模式没指定主模型，已按配置里的 preload_model 使用：E:\Code\llama\models\Qwen3.8-27B-Uncensored-IQ4_XS.gguf
+决策表：命令行直传 | 主模型 | -m E:\Code\llama\models\Qwen3.8-27B-Uncensored-IQ4_XS.gguf | 主模型留空，按配置里的 preload_model 推出
+```
+
+界面里这种情况会给一个「填入探测值」按钮（点一下就把推算结果写进 `main_model`，之后以它为准）；
+填了 `main_model` 就完全以它为准，两者都没有时才会报「single 模式但没有指定主模型」。
+自检面板的「模型文件是否完好 / 显存够不够」也走同一个推算，不会因为主模型留空就漏检。
 
 **实测**（真实 llama-server，b10488）：把上面那份配置跑起来，服务器日志是
 

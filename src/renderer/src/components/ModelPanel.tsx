@@ -201,7 +201,8 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
           <PathRow
             label="主模型（-m）"
             value={typeof config.main_model === "string" ? config.main_model : ""}
-            placeholder="E:\Code\llama\models\xxx.gguf"
+            placeholder="点「浏览…」选择 .gguf"
+            hint="单模型模式：这个模型直接由命令行启动（分片模型选第一个分片即可）"
             onPick={() => void pick("main_model", "gguf", "选择主模型")}
             onChange={(next) => update({ main_model: next ?? "" })}
           />

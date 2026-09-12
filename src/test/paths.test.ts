@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { chooseDataLayout, isDirWritable, PORTABLE_DATA_SUBDIR } from "../main/paths.ts";
+import { chooseDataLayout, isDirWritable, PORTABLE_DATA_SUBDIR, resolveAppDir } from "../main/paths.ts";
 
 test("isDirWritable：可写目录返回 true，且不留探针文件", () => {
   const dir = mkdtempSync(join(tmpdir(), "llama-paths-"));
@@ -75,4 +75,33 @@ test("isDirWritable：目录里的文件不影响判定（只探测能否写新�
   mkdirSync(join(dir, "子目录"));
   assert.equal(isDirWritable(dir), true);
   rmSync(dir, { recursive: true, force: true });
+});
+
+test("resolveAppDir：单文件便携版用 PORTABLE_EXECUTABLE_DIR（不能用 %TEMP% 里的解压目录）", () => {
+  // 实测：便携版每次启动都解压到 %TEMP%\<随机名>\，app.getPath("exe") 指的是那里
+  const dir = resolveAppDir({
+    portableExecutableDir: "E:\\llama-launcher-dist",
+    exePath: "C:\\Users\\feng\\AppData\\Local\\Temp\\3JDpNFX2tCZGwr9Q\\llama-launcher.exe",
+  });
+  assert.equal(dir, "E:\\llama-launcher-dist");
+});
+
+test("resolveAppDir：没有该环境变量时用 exe 所在目录（--dir / 安装版 / 开发模式）", () => {
+  assert.equal(
+    resolveAppDir({ exePath: "E:\\llama-launcher-dist\\win-unpacked\\llama-launcher.exe" }),
+    "E:\\llama-launcher-dist\\win-unpacked",
+  );
+});
+
+test("resolveAppDir：环境变量是空串或纯空白时同样退回 exe 目录", () => {
+  const exePath = "E:\\app\\llama-launcher.exe";
+  assert.equal(resolveAppDir({ portableExecutableDir: "", exePath }), "E:\\app");
+  assert.equal(resolveAppDir({ portableExecutableDir: "   ", exePath }), "E:\\app");
+});
+
+test("resolveAppDir：便携目录带尾部分隔符/正斜杠也能归一化", () => {
+  assert.equal(
+    resolveAppDir({ portableExecutableDir: "E:/llama-launcher-dist/", exePath: "C:\\Temp\\x\\llama-launcher.exe" }),
+    "E:\\llama-launcher-dist",
+  );
 });

@@ -4,7 +4,6 @@
  */
 
 import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import type {
@@ -29,7 +28,7 @@ import type {
 } from "../shared/ipc.ts";
 import { LauncherSession } from "./session.ts";
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, settingsPathFor } from "./settings.ts";
-import { chooseDataLayout } from "./paths.ts";
+import { chooseDataLayout, resolveAppDir } from "./paths.ts";
 import { TrayController } from "./tray.ts";
 import type { TrayState } from "./tray.ts";
 
@@ -52,6 +51,17 @@ const AUTOSTART_SUPPORTED = process.platform === "win32" || process.platform ===
 const START_HIDDEN = process.argv.includes("--hidden");
 
 /**
+ * 应用目录：单文件便携版取 `PORTABLE_EXECUTABLE_DIR`，其余情况取 exe 所在目录。
+ *
+ * 两者不等价的原因见 `paths.ts` 的 {@link resolveAppDir}：便携版每次启动都解压到
+ * `%TEMP%\<随机名>\`，`app.getPath("exe")` 指的是那里，不能当应用目录用。
+ */
+const appDir = resolveAppDir({
+  portableExecutableDir: process.env.PORTABLE_EXECUTABLE_DIR,
+  exePath: app.getPath("exe"),
+});
+
+/**
  * 数据与配置的落点，在模块加载时就算好。
  *
  * 必须**早于 app ready** 调用 `app.setPath("userData", ...)`：Electron 会在 ready 之后
@@ -63,7 +73,7 @@ const START_HIDDEN = process.argv.includes("--hidden");
  */
 const layout = chooseDataLayout({
   isPackaged: app.isPackaged,
-  exeDir: dirname(app.getPath("exe")),
+  exeDir: appDir,
   projectDir: app.getAppPath(),
   defaultUserDataDir: () => app.getPath("userData"),
 });
@@ -111,10 +121,10 @@ function getSession(): LauncherSession {
         },
         onMetrics: (sample) => win?.webContents.send(IPC.pushMetrics, sample),
       },
-      // exe 目录作为自动探测的第一起点：便携版双击启动时 cwd 不可靠
-      // （可能在 exe 目录、也可能在系统目录），以 exe 为锚才找得到
+      // 应用目录作为自动探测的第一起点：便携版双击启动时 cwd 不可靠
+      // （可能在 exe 目录、也可能在系统目录），以它为锚才找得到
       // 「项目目录下并列着 llama.cpp」这种常见布局
-      { searchDirs: [dirname(app.getPath("exe"))] },
+      { searchDirs: [appDir] },
     );
   }
   return session;

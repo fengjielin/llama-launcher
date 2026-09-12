@@ -11,13 +11,49 @@
  */
 
 import { closeSync, openSync, unlinkSync, writeSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 /** 便携模式下 Chromium 运行时数据放哪个子目录（与 exe 同级，避免把应用目录弄乱） */
 export const PORTABLE_DATA_SUBDIR = "data";
 
 /** 启动器在便携模式下使用的配置文件名（直接放 exe 同级，方便手改） */
 export const PORTABLE_CONFIG_NAME = "llama-launcher.json";
+
+/** {@link resolveAppDir} 的入参 */
+export interface ResolveAppDirInput {
+  /**
+   * electron-builder 的单文件便携版注入的环境变量 `PORTABLE_EXECUTABLE_DIR`
+   * （值就是那个便携 exe 真正所在的目录）。非便携版为 `undefined`。
+   */
+  portableExecutableDir?: string | undefined;
+  /** `app.getPath("exe")` 的返回值 */
+  exePath: string;
+}
+
+/**
+ * 解析"应用目录"：配置、数据、llama.cpp 自动探测都以它为基准。
+ *
+ * 为什么需要这一步：**单文件便携版（`portable` 目标）每次启动都会先把自己解压到
+ * `%TEMP%\<随机名>\`**，所以 `app.getPath("exe")` 指向的是那个临时目录。
+ * 直接拿它当应用目录的话，配置与数据都会写进临时目录，而下次启动解压出来的目录名又不一样 ——
+ * 用户看到的现象就是「便携版每次启动配置都被重置」（实测确认过）。
+ * electron-builder 的 `portable.nsi` 为此注入了 `PORTABLE_EXECUTABLE_DIR`（= 便携 exe 所在目录），
+ * 有它就以它为准。`--dir` 免安装目录、NSIS 安装版和开发模式都不会有这个变量，走 exe 目录。
+ *
+ * @param input 便携目录环境变量与 exe 路径
+ * @returns 应用目录的绝对路径（已归一化）
+ */
+export function resolveAppDir(input: ResolveAppDirInput): string {
+  const portable = input.portableExecutableDir?.trim();
+  if (portable) {
+    try {
+      return resolve(portable);
+    } catch {
+      // 环境变量给了非法路径：静默退回 exe 目录 —— 宁可落到临时目录，也不能因此起不来
+    }
+  }
+  return dirname(input.exePath);
+}
 
 /**
  * 探测某个目录是否可写。

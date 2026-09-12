@@ -14,7 +14,7 @@
 | **M1** | core：schema / 探测 / 拼装 / presets / 配置 / 进程 / 日志 / 健康检查 / CLI / 单测 | ✅ 已实跑 llama-server 验证 |
 | **M2** | Electron + React + Tailwind 界面：模型选择、schema 驱动表单、启停、日志、决策表 | ✅ 已完成，已实跑「界面点启动 → 日志回流」全流程验证 |
 | **M3** | 资源监控（VRAM/温度/功耗/曲线）、托盘常驻、多套配置档案、开机自启 | ✅ 已完成，已实跑真实 GPU 采集与档案落盘验证（共 109 项单测） |
-| **M4** | 驱动/后端预检、打包分发 | 🚧 预检 ✅、免安装打包 ✅（已实跑打包产物）；单文件安装包受阻于 electron-builder 上游 bug，详见下文 |
+| **M4** | 驱动/后端预检、打包分发 | ✅ 预检 ✅；免安装目录与单文件便携版都已实跑验证（打包前规避 `.asar` 占用的入口是 `scripts/package.mjs`） |
 | M5 | HF 镜像下载、多实例管理、`presets.ini` 可视化编辑 | 待开始 |
 
 ## 界面长什么样
@@ -137,7 +137,7 @@ llama-launcher/
 pnpm test          # 等价于 node src/test/run-tests.ts
 ```
 
-155 项测试覆盖：`--help` 解析（真实 fixture）、能力回退、preset 并集/单模型/非 ASCII/BOM、命令行拼装黄金用例、
+159 项测试覆盖：`--help` 解析（真实 fixture）、能力回退、preset 并集/单模型/非 ASCII/BOM、命令行拼装黄金用例、
 预加载覆盖规则、旧版本各回退分支、参数改名、配置迁移、上下文单位识别、行缓冲跨块、日志分类、失败诊断、
 `/health` 的 200/503 语义、端口顺延、GPU 采集解析（真实 `nvidia-smi` 输出）、CPU 差分、指标环形缓冲与序列化、
 档案 CRUD 与文件名安全化、PE 导入表解析（真实 `ggml-cuda.dll`）、环境自检各判定分支、数据落点三种情形、
@@ -317,9 +317,22 @@ Windows 与 macOS 支持；Linux 需要安装 `.desktop` 项，暂未实现（�
 
 ```powershell
 pnpm package            # → dist/win-unpacked/ ：免安装目录，双击 llama-launcher.exe 即用
-pnpm package:portable   # → 单文件便携版（当前受阻，见下）
+pnpm package:portable   # → dist/llama-launcher-<版本>-portable.exe ：单文件便携版
 pnpm package:check      # 只做打包前诊断：报告哪个文件被占用、本次会输出到哪里
 ```
+
+单文件便携版**已实跑验证**：那个 exe 拷到哪儿都能双击启动，配置与数据生成在**它自己旁边**
+（不是 `%TEMP%`，也不是 `%APPDATA%`），改完配置文件下次启动照旧生效。
+
+> 打便携版时 electron-builder 要下载 7za / NSIS 工具链，**回来的是 GitHub 的地址**，
+> 在国内会 `connect ETIMEDOUT`。加一个镜像环境变量即可（实测通了）：
+>
+> ```powershell
+> $env:ELECTRON_BUILDER_BINARIES_MIRROR='https://npmmirror.com/mirrors/electron-builder-binaries/'
+> pnpm package:portable
+> ```
+>
+> 工具链下过一次就有缓存，之后不用再带这个变量。
 
 产物里**只有启动器自己**（`out/` 三份产物 + `package.json`）：llama.cpp 与模型都留在外面 ——
 它们是几十 GB 的东西，而且你本来就会换构建版本，打进去反而没法换。启动器启动时按配置去找
@@ -354,17 +367,27 @@ pnpm package
 
 ### 数据放哪儿：便携优先
 
-策略在 `src/main/paths.ts`（有单测覆盖三种情形）：
+策略在 `src/main/paths.ts`（有单测覆盖各种情形）：
 
 | 情形 | 配置 | Chromium 运行时数据 |
 | --- | --- | --- |
 | 开发模式（未打包） | 项目根目录 | Electron 默认 userData（不动它） |
-| **打包后，exe 目录可写** | **`<exeDir>/llama-launcher.json`** | **`<exeDir>/data/`** |
+| **打包后，exe 目录可写** | **`<应用目录>/llama-launcher.json`** | **`<应用目录>/data/`** |
 | 打包后，exe 目录只读（如装进 `Program Files`） | `%APPDATA%\llama-launcher\` | 同左 |
+
+其中「应用目录」由 `resolveAppDir()` 决定，**不是简单的 `dirname(app.getPath("exe"))`**：
+单文件便携版（`portable` 目标）每次启动都会把自己解压到 `%TEMP%\<随机名>\`，
+`app.getPath("exe")` 指的是那个临时目录 —— 直接用它的话配置会写进临时目录，
+而下次启动解压出的目录名又不一样，用户看到的现象就是 **「便携版每次启动配置都被重置」**。
+electron-builder 的 `portable.nsi` 为此注入了 `PORTABLE_EXECUTABLE_DIR`（= 便携 exe 真正所在的目录），
+有它就以它为准（这条路径有 4 个单测）。
 
 也就是说：**便携模式下整个文件夹拷走就等于把配置与数据一起带走，`%APPDATA%` 里不留任何东西**
 （实测：清空 `%APPDATA%\llama-launcher` 后跑一次打包产物，那个目录不会被再创建，而 exe 旁边
 出现了 `llama-launcher.json` 与 `data/`）。界面左栏「启动器设置」里把这三条路径直接显示出来。
+
+对单文件便携版实测过两件事：配置与数据生成在**便携 exe 旁边**；把 `port` 手改成 18080 后
+再启动一次，界面里读到的就是 18080（说明读的是同一个文件，不是每次重新生成）。
 
 ### 首次运行：自动生成配置并重新加载
 
@@ -386,11 +409,12 @@ exe 旁边还没有配置时，启动过程是「**生成 → 重新读一遍**�
 > 早先的写法在这里报的是「配置文件不存在…已使用默认值」，明明已经生成好了却先报一句像错误的话
 > —— 现在这类中性信息走 `BootstrapPayload.notices`，与真正的 `warnings` 分开渲染。
 
-### 自动探测 llama.cpp 目录：以 exe 为锚，向上回溯 3 层
+### 自动探测 llama.cpp 目录：以应用目录为锚，向上回溯 3 层
 
 `discoverLlamaDir` 的顺序是：环境变量 `LLAMA_SERVER` / `LLAMA_DIR` → 逐个起点目录，**每层检查
 「该层本身」与「该层的 `llama.cpp/`」后向上回溯最多 3 层**。起点列表由主进程传入，
-**第一个是 exe 所在目录**，其次才是 cwd。
+**第一个是应用目录**（`resolveAppDir()`：便携版是便携 exe 所在目录，其余情况是 exe 所在目录），
+其次才是 cwd。
 
 为什么不能只用 cwd：便携版双击启动时 cwd 是 exe 目录（甚至可能落在系统目录），
 而常见布局是「项目目录下并列着 `llama.cpp` 与 `llama-launcher\dist\win-unpacked\`」——
@@ -411,11 +435,13 @@ exe 旁边还没有配置时，启动过程是「**生成 → 重新读一遍**�
    `ElectronDownloadCacheMode`，但依赖范围写的是 `^3.0.0`，而 **3.0.0 并不导出该符号**（3.1.0 才导出），
    于是报 `Cannot read properties of undefined (reading 'ReadWrite')`。
    绕法：`electronDist` 指向已解压的发行目录，不走那条下载路径。
-2. **同一个 bug 也卡住安装包**：`portable` / `nsis` 目标要下载 7za、NSIS 工具链，走的还是那条坏路径，
-   因此**单文件安装包目前打不出来**（`--dir` 免安装目录不受影响）。
-   彻底的修法是把 `@electron/get` 提到 3.1.0 并让 `app-builder-lib` 用上它 ——
-   已在 `package.json` 里装了 `@electron/get@3.1.0` 并加了 `pnpm.overrides`，但 pnpm 没把它应用到
-   `app-builder-lib` 的那份嵌套副本上，还需要再想办法（`pnpm patch` 或清理 lockfile 重装）。
+2. **`@electron/get` 版本被迫顶到 3.1.0**（写进 `pnpm-workspace.yaml` 的 `overrides`）：
+   `app-builder-lib` 声明的是 `^3.0.0`，而 3.0.0 不导出 `ElectronDownloadCacheMode`，于是报
+   `Cannot read properties of undefined (reading 'ReadWrite')`。这一个 override 同时修好了
+   **免安装目录与便携版**（先前以为"安装包走的是同一条坏路径、所以打不出来"，实测是错的 ——
+   便携版打不出来只是网络问题，见上面的镜像变量）。排查时注意：`.pnpm/` 里可能同时留着
+   新旧两个 `app-builder-lib@*` 目录，**别用 `Select-Object -First 1` 去读，会读到废弃的那个**
+   （我就这么误判过一次）。
 3. **图标给现成的 `.ico`**，不要让 electron-builder 从 PNG 转换（它的转换要调 app-builder 的二进制，本机报错）。
    `build/icon.ico` 是手写的：ICO 头 + 内嵌一张 256×256 PNG（Windows Vista+ 原生支持这种形式）。
 4. **产出的 `.asar` 会被本机的常驻进程长期占用，进而毒掉下一次打包**（详见「为什么要经过
@@ -436,8 +462,8 @@ exe 旁边还没有配置时，启动过程是「**生成 → 重新读一遍**�
 
 ## 下一步（M5）
 
-- **单文件安装包**：把上面第 2 条坑解决掉（让 `app-builder-lib` 用上 `@electron/get@3.1.0`），
-  然后 `pnpm package:portable` 就能出便携版单 exe、`nsis` 目标能出安装程序
+- ~~**单文件安装包**~~ ✅ 已完成：`pnpm package:portable` 出便携版单 exe（`nsis` 安装程序同理，
+  只是本机没实跑安装流程）
 - **HF 镜像下载**：接 `hf-mirror`，带进度与断点续传；以及 `llama-quantize` / `gguf-split` 的图形化
 - **`presets.ini` 可视化编辑**：在界面里增删改模型段，不必手写 ini
 - **多实例管理**：同时跑多个 llama-server，各自分配端口与显卡

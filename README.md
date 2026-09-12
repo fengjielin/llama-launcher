@@ -61,9 +61,6 @@ node src/cli.ts probe --llama-dir E:\Code\llama\llama.cpp
 
 # 4) 真正启动（流式打印日志、自动健康检查、失败给诊断、Ctrl+C 停止）
 node src/cli.ts run --config llama-launcher.json
-
-# 5) 把原版启动器（v1.9）的配置迁移过来
-node src/cli.ts migrate --from "E:\Code\llama\llamaServer启动器\llama_launcher_config.json"
 ```
 
 其它：`pnpm test` 跑测试；`node src/cli.ts init --help`… 见 `node src/cli.ts help`。
@@ -78,7 +75,7 @@ llama-launcher/
 │  ├─ helpProbe.ts     ★ `--help` 解析 + 能力视图（参数改名的兜底机制）
 │  ├─ args.ts          ★ 命令行拼装（纯函数）+ 参数决策表
 │  ├─ presets.ts       presets.ini 解析（含非 ASCII 路径迁移）
-│  ├─ config.ts        配置归一化 / v1.9 迁移 / llama.cpp 目录探测
+│  ├─ config.ts        配置归一化 / llama.cpp 目录探测
 │  ├─ launcher.ts      编排层：配置 → 探测 → presets → 命令行
 │  ├─ llamaProcess.ts  进程状态机 / 日志泵 / taskkill 兜底
 │  ├─ logLines.ts      行缓冲 / 日志分类 / 启动失败诊断
@@ -221,14 +218,15 @@ pnpm build; node_modules\.bin\electron .
 | `一键启动脚本\llama-oneclick.ps1` | 作为**行为基准与参数知识来源**：显存档位、`--help` 探测、preset 占位规则、各版本回退、踩坑注释全部继承 |
 | `一键启动脚本\presets.ini` | 直接读取（fixtures 里有一份副本用于测试）；`[defaults]` 的 `; default-model =` 约定继续生效 |
 | `llamaServer启动器\反编译输出\` | 仅作**功能需求参考**（v1.9 的配置字段、UI 分区、GPU 监控方式）。版权归原作者（bilibili:hsxbxq），**不复制其代码、样式与文案、不二次分发** |
-| `llamaServer启动器\llama_launcher_config.json` | 用 `migrate` 子命令迁移字段并保留未知键 |
+| `llamaServer启动器\llama_launcher_config.json` | 仅作**字段命名参考**（哪些参数值得建模、默认值取多少）。启动器**不提供**导入它的功能，配置由 `init` / 界面生成 |
 
 ## 已知偏离与待确认
 
 1. **思考开关**：新版本优先用 `--reasoning on/off/auto`（比 PS1 的 `--reasoning-budget 0` + 环境变量更直接），
    旧版本才回退到 PS1 那套双管齐下。
-2. **`context: 64` 的单位**：v1.9 配置里写 64，按「K」解释成 65536 tokens（16G 档在 PS1 里是 32768，
-   64 不可能是 token 数）。迁移时会**明确告警**，不静默改数。若你原本就想要 64 tokens，改成 `65536` 之外的值并加 `"contextUnit": "tokens"`。
+2. **`context: 64` 的单位**：`context` 落在 1..512 且没写 `contextUnit` 时，按「K」解释成 65536 tokens
+   （16K 档在 PS1 里写的是 32768，64 不可能是 token 数）。这条只**识别 + 明确告警**，不静默改数。
+   若你原本就想要 64 tokens，把 `context` 显式写成 `64` 并加 `"contextUnit": "tokens"`。
 3. **`presets.ini` 里那行 `; default-model = Qwen3.8-27B-Uncensored-IQ4_XS` 是注释，但 PS1 的读取逻辑仍然认它** ——
    也就是说你现在的脚本**每次启动都会预加载 27B 模型**。`init` 会把这个行为如实写进配置的 `preload_model`。
    不想要预加载就把 `preload_model` 置空（GUI 里会是个开关）。

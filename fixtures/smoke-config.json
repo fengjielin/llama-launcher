@@ -1,0 +1,20 @@
+{
+  "说明": "端到端冒烟测试用的配置：router 模式、不预加载模型，所以 llama-server 秒起、不占显存，用来验证『启动→日志流→就绪判断→停止』整条链路。",
+  "llama_dir": "E:/Code/llama/llama.cpp",
+  "mode": "router",
+  "models_dir": "E:/Code/llama/models",
+  "models_preset": "",
+  "preload_model": "",
+  "host": "127.0.0.1",
+  "port": 8099,
+  "context": 4096,
+  "max_predict": 512,
+  "gpu_layers": "auto",
+  "fit_target": 1024,
+  "load_mode": "mmap+mlock",
+  "kv_k_type": "q4_0",
+  "kv_v_type": "q4_0",
+  "flash_attention": true,
+  "jinja": true,
+  "think": "off"
+}

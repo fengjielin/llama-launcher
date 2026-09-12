@@ -3,7 +3,7 @@ import type { LauncherController } from "../hooks/useLauncher.ts";
 import { Badge, Button, copyText } from "./ui.tsx";
 
 export function CommandBar({ launcher }: { launcher: LauncherController }) {
-  const { preview, previewError, warnings, lastStart } = launcher;
+  const { preview, previewError, warnings, notices, lastStart } = launcher;
   const [copied, setCopied] = useState(false);
   const command = preview?.command ?? "";
   const failed = lastStart !== null && !lastStart.report.ready;
@@ -62,6 +62,17 @@ export function CommandBar({ launcher }: { launcher: LauncherController }) {
             </div>
           ) : null}
         </div>
+      ) : null}
+
+      {notices.length > 0 ? (
+        <ul className="space-y-0.5">
+          {notices.map((notice) => (
+            <li key={notice} className="flex items-start gap-1.5 text-[11px] text-sky-300/90">
+              <span className="shrink-0">ℹ</span>
+              <span className="min-w-0 break-words">{notice}</span>
+            </li>
+          ))}
+        </ul>
       ) : null}
 
       {warnings.length > 0 ? (

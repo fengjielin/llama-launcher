@@ -427,19 +427,28 @@ export function resolveServerExe(config: LauncherConfig): string {
 /**
  * 探测 llama.cpp 构建目录（`llama-server.exe` 所在目录）。
  *
- * 查找顺序与 llama-oneclick.ps1 一致，逐级放宽：
- * 1. 环境变量 `LLAMA_SERVER`（直接指向 exe，取其所在目录）
+ * 查找顺序（逐级放宽，找到即返回）：
+ * 1. 环境变量 `LLAMA_SERVER`：直接指向 exe，取其所在目录
  * 2. 环境变量 `LLAMA_DIR`
- * 3. 对每个起点目录，依次试：起点本身、`<起点>/llama.cpp`、`<起点>/../llama.cpp`
+ * 3. 对每个起点目录**向上回溯最多 `maxUpLevels` 层**，每层检查「该层本身」与「该层的 `llama.cpp/`」
  *
- * 之所以要"上一级"，是因为常见的目录布局是 `项目/脚本/` 与 `项目/llama.cpp/` 并列。
+ * 第 3 条为什么要向上回溯：打包后的便携版，exe 在
+ * `<项目>\llama-launcher\dist\win-unpacked\`，而 llama.cpp 在 `<项目>\llama.cpp\` ——
+ * 中间隔着三层目录。只查"自己 / 自己下面 / 上一级"会漏掉这种常见布局，
+ * 于是首次运行生成的配置里 `llama_dir` 是空的（踩过，用户看到的现象就是它）。
+ *
  * 判断依据始终是「该目录下存在 `llama-server.exe`」，不做更聪明的猜测。
  *
- * @param startDirs 起点目录列表，按顺序尝试（通常是 `process.cwd()` 与配置里的 `llama_dir`）
+ * @param startDirs 起点目录列表，按顺序尝试（打包时把 exe 目录放最前，其次 cwd）
  * @param env 环境变量来源，默认 `process.env`；测试时可注入
+ * @param maxUpLevels 每个起点最多向上回溯几层，默认 3
  * @returns 探测到的目录**绝对路径**；全部落空时返回 `null`
  */
-export function discoverLlamaDir(startDirs: readonly string[], env: NodeJS.ProcessEnv = process.env): string | null {
+export function discoverLlamaDir(
+  startDirs: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+  maxUpLevels = 3,
+): string | null {
   const explicitExe = env["LLAMA_SERVER"];
   if (explicitExe && existsSync(explicitExe)) return dirname(explicitExe);
 
@@ -447,9 +456,14 @@ export function discoverLlamaDir(startDirs: readonly string[], env: NodeJS.Proce
   if (explicitDir && existsSync(join(explicitDir, "llama-server.exe"))) return resolve(explicitDir);
 
   for (const start of startDirs) {
-    const candidates = [start, join(start, "llama.cpp"), join(start, "..", "llama.cpp")];
-    for (const dir of candidates) {
-      if (existsSync(join(dir, "llama-server.exe"))) return resolve(dir);
+    let current = resolve(start);
+    for (let level = 0; level <= maxUpLevels; level += 1) {
+      for (const candidate of [current, join(current, "llama.cpp")]) {
+        if (existsSync(join(candidate, "llama-server.exe"))) return candidate;
+      }
+      const parent = dirname(current);
+      if (parent === current) break; // 已经到盘根，别再往上
+      current = parent;
     }
   }
   return null;

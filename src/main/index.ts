@@ -100,15 +100,22 @@ function defaultConfigPath(): string {
  */
 function getSession(): LauncherSession {
   if (session === null) {
-    session = new LauncherSession(defaultConfigPath(), {
-      onLog: (entry) => win?.webContents.send(IPC.pushLog, entry),
-      onState: (push) => {
-        win?.webContents.send(IPC.pushState, push);
-        // 托盘图标要跟着服务状态变色（灰=没跑 / 绿=在跑）
-        updateTray({ serverState: push.state, running: push.state === "running" });
+    session = new LauncherSession(
+      defaultConfigPath(),
+      {
+        onLog: (entry) => win?.webContents.send(IPC.pushLog, entry),
+        onState: (push) => {
+          win?.webContents.send(IPC.pushState, push);
+          // 托盘图标要跟着服务状态变色（灰=没跑 / 绿=在跑）
+          updateTray({ serverState: push.state, running: push.state === "running" });
+        },
+        onMetrics: (sample) => win?.webContents.send(IPC.pushMetrics, sample),
       },
-      onMetrics: (sample) => win?.webContents.send(IPC.pushMetrics, sample),
-    });
+      // exe 目录作为自动探测的第一起点：便携版双击启动时 cwd 不可靠
+      // （可能在 exe 目录、也可能在系统目录），以 exe 为锚才找得到
+      // 「项目目录下并列着 llama.cpp」这种常见布局
+      { searchDirs: [dirname(app.getPath("exe"))] },
+    );
   }
   return session;
 }

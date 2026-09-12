@@ -26,3 +26,6 @@ import "./profiles.test.ts";
 import "./pe.test.ts";
 import "./precheck.test.ts";
 import "./paths.test.ts";
+
+// ---- 首次运行、自动探测与数据落点 ----
+import "./discover.test.ts";

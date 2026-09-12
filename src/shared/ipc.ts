@@ -98,7 +98,13 @@ export interface SchemaPayload {
 export interface BootstrapPayload {
   configPath: string;
   config: LauncherConfig;
+  /** 需要用户留意的问题（配置矛盾、探测失败等），界面上以 ⚠ 展示 */
   warnings: string[];
+  /**
+   * 中性通知（不是问题），例如"首次运行已生成默认配置"、"已自动探测到 llama.cpp 目录"。
+   * 与 warnings 分开，是为了不把"刚生成好配置"这种好消息渲染成一条警告。
+   */
+  notices: string[];
   schema: SchemaPayload;
   platform: string;
   /** true = 当前运行在 Electron 里；false = 浏览器回退壳 */

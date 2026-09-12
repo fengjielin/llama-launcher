@@ -40,6 +40,8 @@ export interface LauncherController {
   config: LauncherConfig | null;
   schema: SchemaPayload | null;
   warnings: string[];
+  /** 中性通知（如「首次运行已生成默认配置」），界面上以 ℹ 展示而不是 ⚠ */
+  notices: string[];
   detect: DetectPayload | null;
   detectError: string | null;
   preview: PreviewPayload | null;
@@ -118,6 +120,8 @@ export function useLauncher(): LauncherController {
   const [config, setConfig] = useState<LauncherConfig | null>(null);
   const [schema, setSchema] = useState<SchemaPayload | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
+  /** 中性通知（不是问题），与 warnings 分开展示 */
+  const [notices, setNotices] = useState<string[]>([]);
   const [detect, setDetect] = useState<DetectPayload | null>(null);
   const [detectError, setDetectError] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewPayload | null>(null);
@@ -144,6 +148,8 @@ export function useLauncher(): LauncherController {
     setConfig(payload.config);
     setSchema(payload.schema);
     setWarnings(payload.warnings);
+    // 中性通知（如"首次运行已生成配置"）：老载荷里可能没有这个字段，兜一下底
+    setNotices(payload.notices ?? []);
   }, []);
 
   /**
@@ -534,6 +540,7 @@ export function useLauncher(): LauncherController {
     config,
     schema,
     warnings,
+    notices,
     detect,
     detectError,
     preview,

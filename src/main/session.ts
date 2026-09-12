@@ -61,6 +61,17 @@ export interface SessionEvents {
   onMetrics?: (payload: MetricsPayload) => void;
 }
 
+/** {@link LauncherSession} 的构造选项 */
+export interface SessionOptions {
+  /**
+   * 自动探测 llama.cpp 时额外要看的起点目录。
+   *
+   * 主进程会传 **exe 所在目录**：便携版双击启动时 cwd 不可靠（可能是 exe 目录、也可能是系统目录），
+   * 以 exe 为锚才能找到常见的「项目目录下并列着 llama.cpp」布局。
+   */
+  searchDirs?: readonly string[];
+}
+
 /**
  * 一次会话的全部状态：当前配置、能力探测结果、命令行预览、运行中的进程。
  *
@@ -88,57 +99,96 @@ export class LauncherSession {
   private lastPrecheck: PrecheckReport | null = null;
   private precheckKey = "";
   private events: SessionEvents;
+  /**
+   * 自动探测 llama.cpp 时额外要看的起点目录。
+   *
+   * 主进程会把 **exe 所在目录**传进来：打包后的便携版里，cwd 往往是别处
+   * （双击图标启动时 cwd 就落在 exe 目录甚至系统目录），只有以 exe 为锚才找得到
+   * 常见的 `项目/llama.cpp` 布局。
+   */
+  private readonly searchDirs: readonly string[];
+  /** 面向用户的通知（不是问题，例如"首次运行已生成配置"），与 warnings 分开展示 */
+  private configNotices: string[] = [];
 
   /**
-   * @param configPath 配置文件路径；文件不存在也不会报错，会退化成默认配置并给出告警
+   * @param configPath 配置文件路径；文件不存在也不会报错，会生成一份默认配置并给出通知
    * @param events 日志与状态的回调，见 {@link SessionEvents}
+   * @param options.searchDirs 额外的探测起点目录（打包时传 exe 目录）
    */
-  constructor(configPath: string, events: SessionEvents = {}) {
+  constructor(configPath: string, events: SessionEvents = {}, options: SessionOptions = {}) {
     this.configPath = configPath;
     this.events = events;
+    this.searchDirs = options.searchDirs ?? [];
   }
 
   // ------------------------------------------------------------------ 配置
 
   /**
-   * 启动时拉一次初始状态：读配置 + 打包成界面需要的载荷。
+   * 启动时拉一次初始状态：读配置（必要时生成）+ 打包成界面需要的载荷。
    *
-   * @returns 配置路径、归一化配置、参数表与告警，见 {@link BootstrapPayload}
+   * @returns 配置路径、归一化配置、参数表、通知与告警，见 {@link BootstrapPayload}
    */
   bootstrap(): BootstrapPayload {
     this.reloadConfig();
     return this.bootstrapPayload();
   }
 
+  /** 自动探测 llama.cpp 时的起点目录，按优先级排列（exe 目录 → cwd → 配置里写的目录） */
+  private searchStartDirs(config?: LauncherConfig): string[] {
+    const dirs = [...this.searchDirs, process.cwd()];
+    if (config !== undefined && config.llama_dir !== "") dirs.push(config.llama_dir);
+    return dirs.filter((dir) => dir !== "");
+  }
+
   /**
-   * 从磁盘重读配置。
+   * 从磁盘重读配置；**文件不存在就生成一份默认配置**。
    *
-   * 边界：**配置文件不存在不算错误** —— 这是首次运行的正常情况。
-   * 此时退回默认配置，并尝试自动探测 llama.cpp 目录；同时**把这份默认配置写到磁盘上**，
-   * 这样便携版用户一运行就能在 exe 旁边看到 `llama-launcher.json`，可以直接编辑。
-   * 目标位置不可写（只读目录）也不影响使用，只是多一条告警。
+   * 首次运行的流程刻意做成"生成 → 重新读一遍"：
+   * 1. 用默认值 + 自动探测到的 llama.cpp 目录拼出初始配置，写到磁盘
+   * 2. **把它当普通配置文件重新读一遍**（`loadConfigFile`），用读回来的结果作为当前配置
+   *
+   * 第 2 步不是多余的：这样"首次运行的内存状态"与"第二次启动读文件的状态"完全一致，
+   * 不会出现"这次能用、下次启动表现不同"的怪现象（归一化的效果也一次到位）。
+   *
+   * 目标位置不可写（只读目录）时不影响使用，只是退化成"用内存里的默认值"并给出告警。
    */
   private reloadConfig(): void {
     if (!existsSync(this.configPath)) {
-      const discovered = discoverLlamaDir([process.cwd()]);
-      this.config = { ...DEFAULT_CONFIG, llama_dir: discovered ?? "" };
-      this.configWarnings = [
-        `配置文件不存在（${this.configPath}），已使用默认值` +
-          (discovered === null ? "；也没能自动探测到 llama.cpp 目录，请在界面里指定" : `；已自动探测到 ${discovered}`),
-      ];
+      const discovered = discoverLlamaDir(this.searchStartDirs());
+      const initial: LauncherConfig = { ...DEFAULT_CONFIG, llama_dir: discovered ?? "" };
+
       try {
-        saveConfigFile(this.configPath, this.config);
-        this.configWarnings.push(`已生成默认配置：${this.configPath}`);
+        saveConfigFile(this.configPath, initial);
       } catch (err) {
+        // 写不进去：继续用内存里的默认值，但要明确告诉用户"改完记得另存为"
+        this.config = initial;
+        this.configNotices = [];
+        this.configWarnings = [
+          `配置文件不存在（${this.configPath}），且无法写入：${err instanceof Error ? err.message : String(err)}`,
+          "当前使用内存里的默认值 —— 修改参数后请用「另存为」选一个可写的位置",
+        ];
+        if (discovered === null) this.configWarnings.push("没能自动探测到 llama.cpp 目录，请在界面里指定（或设置环境变量 LLAMA_DIR）");
+        return;
+      }
+
+      const reloaded = loadConfigFile(this.configPath);
+      this.config = reloaded.config;
+      this.configNotices = [`首次运行：已在 ${this.configPath} 生成默认配置（可以直接编辑这个文件）`];
+      this.configWarnings = [...reloaded.warnings];
+      if (discovered !== null) {
+        this.configNotices.push(`已自动探测到 llama.cpp 目录：${discovered}`);
+      } else {
         this.configWarnings.push(
-          `默认配置写不进磁盘（${err instanceof Error ? err.message : String(err)}）：修改参数后请用「另存为」选一个可写的位置`,
+          "没能自动探测到 llama.cpp 目录，请在左侧「构建目录」里指定（或设置环境变量 LLAMA_DIR / LLAMA_SERVER）",
         );
       }
       return;
     }
+
     const loaded = loadConfigFile(this.configPath);
     this.config = loaded.config;
     this.configWarnings = loaded.warnings;
+    this.configNotices = [];
   }
 
   /** 把当前会话状态打包成界面初始化所需的载荷（含参数表与支持情况） */
@@ -147,6 +197,7 @@ export class LauncherSession {
       configPath: this.configPath,
       config: this.config,
       warnings: this.configWarnings,
+      notices: this.configNotices,
       schema: buildSchemaPayload(this.capabilities()),
       platform: process.platform,
       inDesktopShell: true,
@@ -209,6 +260,8 @@ export class LauncherSession {
     this.configPath = target;
     this.config = normalized;
     this.configWarnings = warnings;
+    // 保存之后"首次运行已生成配置"这类通知就过期了
+    this.configNotices = [];
     // llama.cpp 目录可能变了，能力探测结果要作废
     if (this.capsKey !== this.capsKeyFor(normalized)) this.invalidateCapabilities();
     return { ok: true, path: target, warnings };
@@ -256,7 +309,7 @@ export class LauncherSession {
   private resolveExe(config: LauncherConfig): string | null {
     const direct = resolveServerExe(config);
     if (direct !== "" && existsSync(direct)) return direct;
-    const discovered = discoverLlamaDir([process.cwd(), config.llama_dir].filter((d) => d !== ""));
+    const discovered = discoverLlamaDir(this.searchStartDirs(config));
     return discovered === null ? null : join(discovered, "llama-server.exe");
   }
 

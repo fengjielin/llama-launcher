@@ -18,6 +18,14 @@ import type { LauncherConfig, ServerMode, ThinkingMode } from "./types.ts";
 /** 由 llama.cpp 自己决定的值：直接不传，比人肉猜准 */
 export const AUTO = null;
 
+/**
+ * 归一化后的默认配置，也是"什么都没配"时的兜底基线。
+ *
+ * 选值依据：能对齐就对齐既有脚本（`fit_target` / `load_mode` / `kv_*_type` 来自 llama-oneclick.ps1
+ * 的实测推荐值），其余交给 llama.cpp 自己的默认值。
+ * 采样相关字段刻意留 `null` —— 它们由 {@link normalizeConfig} 按思考模式填两套官方推荐值，
+ * 而不是在这里写死一套。
+ */
 export const DEFAULT_CONFIG: LauncherConfig = {
   llama_dir: "",
   mode: "single",
@@ -68,6 +76,20 @@ const SAMPLING_BY_THINKING: Record<"on" | "off", Pick<LauncherConfig, "temperatu
   off: { temperature: 0.7, top_p: 0.8, presence_penalty: 1.0 },
 };
 
+/**
+ * 把「思考模式」的任意写法归一化成三态枚举。
+ *
+ * 需要它是因为同一个语义在不同来源里写法完全不同：老配置里是 `true/false`，
+ * 界面上是 `on/off/auto`，环境变量里可能是 `"yes"`，而 YAML/JSON 里又可能是字符串 `"true"`。
+ *
+ * 边界：
+ * - `undefined` / `null` / 空串 → 返回 `null`，表示**未设置**（调用方应保留默认值或"不干预"）
+ * - 无法识别的字符串（如 `"看不懂"`）→ 也返回 `null`，绝不猜一个模式出来
+ * - 字符串比较前会 trim 并转小写，`" ON "` 能正确识别
+ *
+ * @param value 任意来源的原始值
+ * @returns `"on"` / `"off"` / `"auto"`；未设置或无法识别时返回 `null`
+ */
 export function normalizeThink(value: unknown): ThinkingMode | null {
   if (value === undefined || value === null || value === "") return null;
   if (value === true) return "on";
@@ -81,17 +103,44 @@ export function normalizeThink(value: unknown): ThinkingMode | null {
   return null;
 }
 
+/**
+ * 宽松取字符串：只接受非空（trim 后）的字符串，其余一律 `null`。
+ *
+ * @param v 任意来源的值
+ * @returns 原字符串；非字符串或全空白时返回 `null`
+ */
 function asString(v: unknown): string | null {
   if (typeof v === "string" && v.trim() !== "") return v;
   return null;
 }
 
+/**
+ * 宽松取数字：既接受 number，也接受能转成有限数字的字符串
+ * （老配置里 `"parallel": "-1"` 就是字符串形态，不能因此丢掉）。
+ *
+ * 边界：`NaN` / `Infinity` / `""` / 非数字字符串一律 `null`，不会把 NaN 带进后续计算。
+ *
+ * @param v 任意来源的值
+ * @returns 解析出的数字；无法解析时返回 `null`
+ */
 function asNumber(v: unknown): number | null {
   if (typeof v === "number" && Number.isFinite(v)) return v;
   if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))) return Number(v);
   return null;
 }
 
+/**
+ * 宽松取布尔，无法判断时返回 `null`（三态，不要把"未知"当成 `false`）。
+ *
+ * 支持 `"true"/"on"/"yes"/"1"` 与 `"false"/"off"/"no"/"0"`。
+ *
+ * 边界：**number 形态的 `0` / `1` 不识别**，返回 `null`。
+ * 这是故意的：老配置里 `"cpu_moe": 0` 更像"数量"而不是"开关"，
+ * 贸然当成 `false` 会改变语义；返回 `null` 时调用方会保留默认值。
+ *
+ * @param v 任意来源的值
+ * @returns 解析出的布尔值；无法判断时返回 `null`
+ */
 function asBoolOrNull(v: unknown): boolean | null {
   if (typeof v === "boolean") return v;
   if (typeof v === "string") {
@@ -102,14 +151,39 @@ function asBoolOrNull(v: unknown): boolean | null {
   return null;
 }
 
+/**
+ * {@link normalizeConfig} 的返回值。
+ *
+ * `warnings` 是给用户看的"我替你改了什么/该注意什么"，不含错误级别的问题 ——
+ * 归一化永远尽力产出一份可用的配置，而不是抛异常拒绝启动。
+ */
 export interface NormalizeResult {
   config: LauncherConfig;
   warnings: string[];
 }
 
 /**
- * 把任意来源的 JSON 对象归一化成 LauncherConfig。
- * 未知键原样保留（迁移 v1.9 配置时不丢数据）。
+ * 把任意来源的 JSON 对象归一化成 {@link LauncherConfig}。
+ *
+ * 输入不需要可信：非对象（`null` / 字符串 / 数字）会被当作空配置处理，
+ * 因此垃圾输入不会抛异常，最坏结果是拿到一份全默认配置。
+ * **未知键原样保留**（迁移 v1.9 配置时不丢数据）。
+ *
+ * 关键分支（顺序有意义）：
+ * 1. **v1.9 迁移**：出现 `cpu_threads` / `推测技术` / `mcp_proxy` 之一即判定为老配置，
+ *    做键名映射并告警；`mcp_proxy` 没有对应实现，只保留不传递
+ * 2. **上下文单位识别**：`context` 取值 `1..512` 且未显式声明单位时按「K」解释（64 → 65536），
+ *    并明确告警 —— 只识别、不静默改数，用户可以按提示显式声明 `contextUnit`
+ * 3. **类型收敛**：数值/布尔/字符串统一走宽松转换，转不出来的保留默认值
+ * 4. **模式推断**：显式 `mode` 优先；否则有 `models_dir` 即判为 router
+ * 5. **思考模式 → 采样默认值联动**：只填用户**没写过**的字段，
+ *    因为 Qwen3 思考/非思考是两套官方推荐值，混用会明显掉质量
+ * 6. **生成上限**：开思考时至少放宽到 16384；上限不小于上下文时告警（那样上限等于失效）
+ * 7. **V cache 量化依赖 Flash Attention**：FA 关了就退回 `f16`，只压 K（否则量化不生效）
+ * 8. **推测解码一致性**：`draft-*` 类型却缺草稿模型时告警
+ *
+ * @param raw 已 `JSON.parse` 的对象，或任何来源的未知值
+ * @returns 归一化后的配置与告警列表；见 {@link NormalizeResult}
  */
 export function normalizeConfig(raw: unknown): NormalizeResult {
   const warnings: string[] = [];
@@ -240,13 +314,37 @@ export function normalizeConfig(raw: unknown): NormalizeResult {
   return { config: out, warnings };
 }
 
+/**
+ * 读配置文件并归一化。
+ *
+ * @param path 配置文件路径
+ * @returns 归一化后的配置与告警，见 {@link NormalizeResult}
+ * @throws {Error} 文件不存在或不可读时由 `readFileSync` 抛出（`ENOENT` / `EPERM` 等）；
+ *   JSON 语法错误时由 `JSON.parse` 抛出 `SyntaxError`。
+ *   调用方若要"读不到就退回默认值"，请先自行判断 `existsSync`
+ */
 export function loadConfigFile(path: string): NormalizeResult {
   const text = readFileSync(path, "utf8");
   const parsed: unknown = JSON.parse(text);
   return normalizeConfig(parsed);
 }
 
-/** 保存配置。UTF-8 且不带 BOM（presets.ini 踩过 BOM 会让 llama-server 解析失败的坑） */
+/**
+ * 保存配置到磁盘。
+ *
+ * 两个刻意为之的细节：
+ * 1. **UTF-8 且不带 BOM** —— BOM 会让下游（llama-server 读 presets.ini 时）直接解析失败，
+ *    这里踩过一次坑，因此不用第三方写库、直接交给 Node；
+ * 2. **键顺序稳定**：先按 `preferred` 列表输出，再把剩下的键追加在后面。
+ *    这样同一份配置反复保存不会产生满屏无意义的 diff，人肉 review 也舒服。
+ *
+ * 值为 `undefined` 的字段会被跳过（不写出 `"key": null` 这种噪音）；
+ * 保留下来的 `null` 是有意义的，表示"交给 llama.cpp 自己决定"。
+ *
+ * @param path 目标路径，所在目录必须已存在
+ * @param config 要保存的配置（通常是归一化后的结果）
+ * @throws {Error} 目录不存在或没有写权限时由 `writeFileSync` 抛出（`ENOENT` / `EPERM`）
+ */
 export function saveConfigFile(path: string, config: LauncherConfig): void {
   const ordered: Record<string, unknown> = {};
   const preferred = [
@@ -310,6 +408,16 @@ export function saveConfigFile(path: string, config: LauncherConfig): void {
   writeFileSync(path, `${JSON.stringify(ordered, null, 2)}\n`, "utf8");
 }
 
+/**
+ * 推出 llama-server.exe 的路径。
+ *
+ * 只做字符串拼接，**不检查文件是否存在**（存在性判断留给调用方，
+ * 因为"配了但文件不在"是需要展示给用户的告警，而不是这里直接返回空）。
+ *
+ * @param config 启动配置
+ * @returns `server_exe` 优先；否则用 `<llama_dir>/llama-server.exe`；
+ *   两者都没配时返回**空串**（调用方应据此走自动探测，而不是拿空串去 spawn）
+ */
 export function resolveServerExe(config: LauncherConfig): string {
   if (config.server_exe) return config.server_exe;
   if (!config.llama_dir) return "";
@@ -317,8 +425,19 @@ export function resolveServerExe(config: LauncherConfig): string {
 }
 
 /**
- * 探测 llama.cpp 构建目录。顺序与 llama-oneclick.ps1 一致：
- * 环境变量 → 给定起点目录 → 起点目录下的 llama.cpp → 起点的上一级 llama.cpp
+ * 探测 llama.cpp 构建目录（`llama-server.exe` 所在目录）。
+ *
+ * 查找顺序与 llama-oneclick.ps1 一致，逐级放宽：
+ * 1. 环境变量 `LLAMA_SERVER`（直接指向 exe，取其所在目录）
+ * 2. 环境变量 `LLAMA_DIR`
+ * 3. 对每个起点目录，依次试：起点本身、`<起点>/llama.cpp`、`<起点>/../llama.cpp`
+ *
+ * 之所以要"上一级"，是因为常见的目录布局是 `项目/脚本/` 与 `项目/llama.cpp/` 并列。
+ * 判断依据始终是「该目录下存在 `llama-server.exe`」，不做更聪明的猜测。
+ *
+ * @param startDirs 起点目录列表，按顺序尝试（通常是 `process.cwd()` 与配置里的 `llama_dir`）
+ * @param env 环境变量来源，默认 `process.env`；测试时可注入
+ * @returns 探测到的目录**绝对路径**；全部落空时返回 `null`
  */
 export function discoverLlamaDir(startDirs: readonly string[], env: NodeJS.ProcessEnv = process.env): string | null {
   const explicitExe = env["LLAMA_SERVER"];

@@ -5,10 +5,31 @@
  * 不自己做行缓冲，日志面板里会随机出现半行。这是 Windows 下最容易被忽略的坑之一。
  */
 
-/** 把 chunk 拼回完整行；未闭合的尾巴留在 buffer 里等下一块 */
+/**
+ * 行缓冲器：把 `child_process` 按块吐出的输出重新拼成完整行。
+ *
+ * 为什么必须有它：stdout 的 chunk 边界与行边界无关，一行经常被切成两块
+ * （"模型加载" 与 "完成" 分属两个 chunk）。不做缓冲，界面日志里就会随机出现半行，
+ * 而且按行做的关键字判断（监听/报错）也会漏。
+ *
+ * 使用约定：运行期反复调 {@link LineSplitter.push}；进程退出后用 {@link LineSplitter.flush}
+ * 取回最后一段没换行的残留。实例不共享，一个进程一个。
+ */
 export class LineSplitter {
   private buf = "";
 
+  /**
+   * 喂入一块输出，返回其中**已经完整**的行。
+   *
+   * 边界处理：
+   * - 兼容 `\r\n`（Windows）与 `\n`，返回的行末尾不带 `\r`
+   * - 结尾没换行的部分留在内部缓冲里，等下一块；本次不会返回
+   * - 兜底：若缓冲超过 1_000_000 字符仍无换行（进程异常输出），
+   *   直接把它当作一行吐出并清空缓冲，避免内存被吃光
+   *
+   * @param chunk 新到达的输出片段（调用方负责按 utf8 解码）
+   * @returns 本次能确定的完整行；没有则为空数组
+   */
   push(chunk: string): string[] {
     this.buf += chunk;
     const lines: string[] = [];
@@ -28,6 +49,14 @@ export class LineSplitter {
     return lines;
   }
 
+  /**
+   * 取回缓冲区里最后一段没有换行结尾的残留。
+   *
+   * 应在进程退出后调用一次（否则最后一行日志会丢），调用后缓冲被清空；
+   * 重复调用会得到空数组。
+   *
+   * @returns 残留内容组成的数组（0 或 1 个元素）
+   */
   flush(): string[] {
     if (this.buf === "") return [];
     const rest = this.buf;
@@ -35,11 +64,26 @@ export class LineSplitter {
     return [rest];
   }
 
+  /** 当前尚未闭合的残留文本，只读；用于调试或界面展示进度 */
   get pending(): string {
     return this.buf;
   }
 }
 
+/**
+ * 日志行的大类，决定界面用什么颜色、是否要额外提示。
+ *
+ * - `server-starting`：进程刚起来的通用信息
+ * - `listening`：端口已开始监听（判断"服务可用了"的可靠信号）
+ * - `model-loading`：模型加载过程的细节（tensor、上下文、后端等）
+ * - `model-loaded`：模型加载完成
+ * - `model-list`：router 模式列出的可用模型清单
+ * - `perf`：吞吐统计（tok/s）
+ * - `warning`：告警
+ * - `oom`：显存/内存不足 —— 最需要醒目提示的一类
+ * - `error`：错误
+ * - `other`：未归类
+ */
 export type LogEventKind =
   | "server-starting"
   | "listening"
@@ -52,18 +96,26 @@ export type LogEventKind =
   | "error"
   | "other";
 
+/** 从日志行里顺带抽出来的数值，全部可选：抽不到就是 `undefined`，不代表 0 */
 export interface LogMetrics {
+  /** prompt 处理速度（tok/s），来自 `prompt eval time = ...` 那一行 */
   promptEvalTokPerSec?: number;
+  /** 生成速度（tok/s），来自 `eval time = ...` 那一行 */
   evalTokPerSec?: number;
+  /** 实际生效的上下文长度，来自 `n_ctx = N` */
   nCtx?: number;
+  /** 卸载到 GPU 的层数，形如 `33/33` */
   offloadedLayers?: string;
 }
 
+/** {@link classify} 的返回值：一行日志的分类、等级、抽出的数值与原文本 */
 export interface LogEvent {
   kind: LogEventKind;
   level: "info" | "warn" | "error";
+  /** 去掉首尾空白的正文，用于展示 */
   message: string;
   metrics: LogMetrics;
+  /** 原始行（未裁剪），便于导出或重新解析 */
   raw: string;
 }
 
@@ -88,7 +140,27 @@ const RE_OFFLOAD = /offloaded\s+(\d+\/\d+)\s+layers to GPU/i;
  */
 const RE_LEVEL_PREFIX = /^\d+(?:\.\d+)*\s+([IWED])\s/;
 
-/** 把一行 llama-server 日志分类并抽数值 */
+/**
+ * 把一行 llama-server 日志分类，并顺带抽出可展示的数值。
+ *
+ * 判定顺序即优先级（先命中先返回，后面的不再看）：
+ * 1. `oom` —— 显存不足最需要醒目，且这类行往往同时含 `error` 字样
+ * 2. `listening` / `model-loaded` / `model-list` —— 状态类，抓的是明确短语
+ * 3. `perf` —— 只要抽到了 tok/s 就算性能行
+ * 4. `error` / `warning` —— **必须排在 `model-loading` 之前**，
+ *    否则 `llama_model_loader: warning: ...` 会被吞进"模型加载中"这一桶里
+ * 5. `model-loading` —— 兜底的加载过程信息
+ * 6. 最后再退回结构化前缀里的等级字母（`E` → error，`W` → warning）
+ *
+ * 等级来源有两处：优先用 b10488 结构化前缀里的字母（`0.00.146.987 W srv ...`），
+ * 它比关键词可靠（`CORS is set to allow all origins` 这类告警不含 warn 字样）；
+ * 没有前缀的老版本日志再退回关键词判断。
+ *
+ * 本函数**永不抛异常**，未识别的行归类为 `other` / `info`。
+ *
+ * @param line 一行完整日志（应由 {@link LineSplitter} 拼好，不要传半行）
+ * @returns 分类结果，见 {@link LogEvent}
+ */
 export function classify(line: string): LogEvent {
   const metrics: LogMetrics = {};
   const promptMatch = RE_PERF_PROMPT.exec(line);
@@ -136,12 +208,19 @@ export function classify(line: string): LogEvent {
   return { kind, level, message: line.trim(), metrics, raw: line };
 }
 
+/**
+ * 启动失败的诊断结论：一句人话总结 + 若干可执行的下一步动作。
+ *
+ * `code` 是稳定的机器可读标识（如 `vram-oom`），供界面做去重或按类展示；
+ * 面向用户的文案都在 `summary` / `suggestions` 里。
+ */
 export interface Diagnosis {
   code: string;
   summary: string;
   suggestions: string[];
 }
 
+/** 一条诊断规则：命中 `re` 就采用该条结论 */
 interface DiagnosisRule {
   code: string;
   re: RegExp;
@@ -219,7 +298,19 @@ const DIAGNOSIS_RULES: readonly DiagnosisRule[] = [
   },
 ];
 
-/** 在最近的日志行里找最可能的失败原因 */
+/**
+ * 在最近的日志行里找最可能的失败原因。
+ *
+ * 按 {@link DIAGNOSIS_RULES} 的**声明顺序**匹配，先命中先返回 —— 顺序即优先级，
+ * 所以"显存不足"排在"端口占用"之前：两者都会刷出 `error` 字样，
+ * 但给出错误建议比不给建议更糟。
+ *
+ * 边界：只做"有没有"，不做因果分析，因此若日志里同时出现多种错误，
+ * 返回的只是优先级最高的那一条；识别不出时返回 `null`（而不是编一个原因）。
+ *
+ * @param lines 待诊断的日志行，通常取进程退出前最近的若干行
+ * @returns 命中的诊断结论（`suggestions` 为副本，调用方改写不会污染规则表）；识别不出返回 `null`
+ */
 export function diagnose(lines: readonly string[]): Diagnosis | null {
   for (const rule of DIAGNOSIS_RULES) {
     if (lines.some((l) => rule.re.test(l))) {

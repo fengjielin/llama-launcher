@@ -17,10 +17,29 @@ import { normalizeThink } from "./config.ts";
 import { hasNonAsciiPath } from "./presets.ts";
 import type { BuildInput, BuildResult, BuildStep, ServerMode, StepReason } from "./types.ts";
 
-/** 思考开关回退方案用的环境变量：PowerShell 传带引号 JSON 给原生 exe 会剥掉引号，所以不走命令行 */
+/**
+ * 思考开关回退方案用的环境变量名。
+ *
+ * 不用命令行传 `--chat-template-kwargs` 的原因（实测踩过）：Windows 下 PowerShell
+ * 把带双引号的 JSON 传给原生 exe 时会把引号剥掉，JSON 就成了非法参数；
+ * llama.cpp 本身读这个环境变量，走它更稳。
+ */
 export const CHAT_TEMPLATE_KWARGS_ENV = "LLAMA_ARG_CHAT_TEMPLATE_KWARGS";
 
-/** 拆自定义参数字符串，支持引号包裹（`--alias "my model"`） */
+/**
+ * 把「自定义参数」文本切成 argv 数组。
+ *
+ * 支持单双引号包裹（`--alias "my model"`），引号内的空白不作为分隔符
+ * —— 否则带空格的模型别名会被切成两个参数。
+ *
+ * 边界：
+ * - 引号未闭合时，剩余内容整体作为最后一个参数（不报错，尽量让用户启动成功）
+ * - 空串、纯空白返回空数组
+ * - 连续空白不会产出空参数；`""` 这种显式空串会被保留为一个空参数
+ *
+ * @param input 用户填写的自定义参数字符串
+ * @returns 参数数组，顺序与输入一致
+ */
 export function splitCustomArgs(input: string): string[] {
   const out: string[] = [];
   let cur = "";
@@ -49,7 +68,15 @@ export function splitCustomArgs(input: string): string[] {
   return out;
 }
 
-/** 拼成可复制的命令行（含引号处理） */
+/**
+ * 把 argv 数组拼成**给人看/给人复制**的一行命令，含空格的参数会补上双引号。
+ *
+ * 注意这只是展示用途：真正 spawn 子进程时应当直接传数组
+ * （Node 会自己处理参数边界），不要把这里的结果再切回数组。
+ *
+ * @param argv 参数数组
+ * @returns 单行命令字符串（不含可执行文件路径本身）
+ */
 export function formatArgv(argv: readonly string[]): string {
   return argv.map((a) => (/[\s"]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a)).join(" ");
 }
@@ -64,12 +91,28 @@ const REASON_LABEL: Record<StepReason, string> = {
   unset: "未配置",
 };
 
-/** 决策表用的原因文案（GUI 由 IPC 载荷拿到同一份，不另写） */
+/**
+ * 取「原因」的中文文案。
+ *
+ * 决策表里每一行都要显示原因，而 GUI 是通过 IPC 拿数据的、CLI 是直接调用的，
+ * 所以文案统一由这里提供（随 `BuildStep.reasonLabel` 一起下发），避免两边各写一份后漂移。
+ *
+ * @param reason 原因枚举
+ * @returns 对应的中文说明
+ */
 export function reasonLabel(reason: StepReason): string {
   return REASON_LABEL[reason];
 }
 
-/** 全角字符按 2 列算，否则中文表头的对齐会全乱 */
+/**
+ * 计算字符串在终端里的显示宽度：全角字符按 2 列算。
+ *
+ * 用途是给决策表对齐列 —— 中文按 1 个字符长度算的话，表格会参差不齐。
+ * 只覆盖常见的宽字符区间（CJK、全角符号、韩文），不做完整的 Unicode East Asian Width 表。
+ *
+ * @param text 待测文本
+ * @returns 显示宽度（列数）
+ */
 function displayWidth(text: string): number {
   let width = 0;
   for (const ch of text) {
@@ -87,11 +130,26 @@ function displayWidth(text: string): number {
   return width;
 }
 
+/**
+ * 按显示宽度右侧补空格（中文按 2 列算），用于终端表格对齐。
+ *
+ * @param text 待补齐的文本
+ * @param width 目标显示宽度；文本已超宽时不截断，原样返回
+ * @returns 补好空格的文本
+ */
 function padDisplay(text: string, width: number): string {
   return text + " ".repeat(Math.max(0, width - displayWidth(text)));
 }
 
-/** 把决策记录渲染成人类可读的表格（CLI 与 GUI 共用） */
+/**
+ * 把决策表渲染成人类可读的定宽表格（CLI 打印用；GUI 用同一份数据自行排版）。
+ *
+ * 每行四列：原因 / 参数名 / 实际传入的片段 / 说明。列宽按最长内容自适应，
+ * 中文按 2 列宽计算以免错位。
+ *
+ * @param steps {@link buildArgs} 产出的决策记录
+ * @returns 多行字符串；`steps` 为空时返回空串
+ */
 export function describeSteps(steps: readonly BuildStep[]): string {
   const lines: string[] = [];
   const labelWidth = Math.max(...steps.map((s) => displayWidth(s.label)), 4);
@@ -105,6 +163,7 @@ export function describeSteps(steps: readonly BuildStep[]): string {
   return lines.join("\n");
 }
 
+/** `emit` 的入参：描述"一个配置项该怎么变成命令行参数" */
 interface EmitOptions {
   key: string;
   label: string;
@@ -122,6 +181,30 @@ interface EmitOptions {
   warning?: string;
 }
 
+/**
+ * 拼装最终的 llama-server 命令行。
+ *
+ * 这是整个 core 的核心，且是**纯函数**：不读文件、不起进程、不访问网络，
+ * 因此同一份配置在任何环境下都会得到同一条命令行（GUI 与 CLI 靠这一点保持一致），
+ * 也正因如此才能用单测逐字节对拍。
+ *
+ * 每个参数的处理都遵循同一套判定顺序（由内部的 `emit` 实现）：
+ * 1. 值为 `undefined`/`null`/空串 → 记 `unset`，**不传给 llama.cpp**（用它的默认值）
+ * 2. `skipWhen` 判定为"无需传"（如 `-1` 表示自动）→ 记 `skipped`
+ * 3. presets.ini 里定义过同名键 → 记 `preset-owned`，命令行**不传**
+ *    （实测命令行优先级更高，传了会盖掉 preset）；
+ *    例外：预加载的模型不吃 preset，此时改由命令行直传，记 `preload-override`
+ * 4. 候选参数名在当前版本一个都不存在 → 记 `unsupported` 并告警，绝不硬传
+ * 5. 否则按 `render` 决定"带值还是纯开关"，追加进 argv，记 `cli`
+ *
+ * 两条贯穿始终的原则：
+ * - **参数名一律走 `caps.pick(candidates)`**，版本改名不用改这里的代码
+ * - **不做静默降级**：任何兼容回退都会同时写进 `steps`（`fallback`）和 `warnings`，
+ *   例如没有 `--fit-target` 时退回 `-ngl 99`，会明确告知而不是悄悄变成纯 CPU 推理
+ *
+ * @param input 配置、能力视图与若干上下文（preset 键集合、预加载模型等），见 {@link BuildInput}
+ * @returns 最终 argv、需附加的环境变量、逐参数决策记录与告警，见 {@link BuildResult}
+ */
 export function buildArgs(input: BuildInput): BuildResult {
   const { config, caps } = input;
   // 内部不带 reasonLabel，统一在返回前补 —— 免得每个 push 点都手写一遍文案
@@ -138,6 +221,13 @@ export function buildArgs(input: BuildInput): BuildResult {
   const presetOwns = (presetKey?: string): boolean =>
     presetKey !== undefined && presetKeys.has(presetKey.toLowerCase());
 
+  /**
+   * 处理一个配置项：按「未配置 → 主动跳过 → preset 接管 → 版本不支持 → 正常传」的顺序判定，
+   * 并把结论记为一条 {@link BuildStep}。所有参数都走这一个函数，保证判定顺序一致、
+   * 决策表的文案也一致。
+   *
+   * @param opts 该项的取值、候选参数名、preset 键与渲染方式，见 {@link EmitOptions}
+   */
   function emit(opts: EmitOptions): void {
     const { key, label, candidates } = opts;
     const value = opts.value;

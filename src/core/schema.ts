@@ -15,6 +15,7 @@
 
 import type { ParamGroup, ParamSpec } from "./types.ts";
 
+/** 参数分组及展示顺序 —— GUI 的参数表单按这个顺序折叠成分节 */
 export const PARAM_GROUPS: readonly { id: ParamGroup; label: string }[] = [
   { id: "model", label: "模型与模式" },
   { id: "server", label: "服务与网络" },
@@ -27,6 +28,18 @@ export const PARAM_GROUPS: readonly { id: ParamGroup; label: string }[] = [
   { id: "misc", label: "其它" },
 ];
 
+/**
+ * 参数表本体：启动器认识的全部 llama-server 参数。
+ *
+ * 维护约定（新增/调整参数时只改这一处即可）：
+ * - 新参数的 **CLI 名字按优先级写进 `candidates`**，把新名放前面、旧名放后面，
+ *   运行时由 `caps.pick()` 挑第一个当前版本支持的，于是版本回退不需要写 if
+ * - 若该参数在 presets.ini 里也有同名配置，必须填 `presetKey`，
+ *   否则会出现"命令行把 preset 盖掉"的隐蔽 bug
+ * - `hint` 里写踩坑提示，它会作为 GUI 的 tooltip 显示
+ *
+ * 表中所有参数名都在 `fixtures/help-b10488.txt` 里核实过真实存在。
+ */
 export const PARAM_SPECS: readonly ParamSpec[] = [
   // ---------------------------------------------------------------- 模型与模式
   {
@@ -311,15 +324,28 @@ export const PARAM_SPECS: readonly ParamSpec[] = [
   { key: "custom_args", label: "自定义参数", group: "misc", kind: "string", candidates: [] },
 ];
 
+/** 配置键 → 参数定义，供界面按字段名反查；键与 {@link ParamSpec.key} 一致 */
 export const PARAM_BY_KEY: Map<string, ParamSpec> = new Map(PARAM_SPECS.map((s) => [s.key, s]));
 
+/**
+ * 按配置键取参数定义。
+ *
+ * @param key 配置键名（如 `context`、`kv_k_type`）
+ * @returns 对应的参数定义；键不在表中时返回 `undefined`（不抛异常）
+ */
 export function specForKey(key: string): ParamSpec | undefined {
   return PARAM_BY_KEY.get(key);
 }
 
 /**
- * 按当前版本能力过滤后的参数表 —— GUI 用它把不支持的项灰掉。
- * 返回 `{ key, supported, resolvedFlag, spec }`。
+ * 拿当前版本能力逐条解析参数表，回答"这个参数能不能用、实际用哪个名字"。
+ *
+ * 与 `summarizeCapabilities` 的区别：那个是给"环境自检"看的汇总统计，
+ * 这个保留每一条的完整信息，供 GUI 逐项渲染（不支持的置灰、改名后显示实际名字）。
+ *
+ * @param caps 能力视图，只用到 `pick()` 一个方法（便于测试里注入假的实现）
+ * @returns 与 {@link PARAM_SPECS} 等长、顺序一致的数组；
+ *   无候选名的参数（如自定义参数）`supported` 恒为 `true`、`resolvedFlag` 为 `null`
  */
 export function resolveSpecs(
   caps: { pick(candidates: readonly string[]): string | null },

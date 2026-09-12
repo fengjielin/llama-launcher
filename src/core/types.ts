@@ -27,9 +27,17 @@ export interface HelpOption {
   section: string;
 }
 
+/**
+ * `llama-server --help` 的完整解析结果。
+ *
+ * 由 {@link parseHelp} 产出，是「当前这个 llama.cpp 版本到底认哪些参数」的唯一依据。
+ */
 export interface HelpModel {
+  /** 解析出的全部选项，顺序与 help 里一致 */
   options: HelpOption[];
+  /** 别名（含短选项）→ 选项，用于按参数名快速反查；同一条选项的多个别名指向同一个对象 */
   byFlag: Map<string, HelpOption>;
+  /** help 里的分节名（如 `common params`），用于展示与分组 */
   sections: string[];
 }
 
@@ -51,6 +59,7 @@ export interface Capabilities {
 // 声明式参数表
 // ---------------------------------------------------------------------------
 
+/** 参数在 GUI 里的分组，决定参数表单折叠成哪几节 */
 export type ParamGroup =
   | "model"
   | "server"
@@ -62,6 +71,7 @@ export type ParamGroup =
   | "tools"
   | "misc";
 
+/** 参数值类型，决定 GUI 用哪种输入控件（开关 / 数字框 / 下拉 / 文本框） */
 export type ValueKind = "int" | "float" | "string" | "bool" | "enum";
 
 export interface ParamSpec {
@@ -95,6 +105,13 @@ export type ServerMode = "single" | "router";
 /** 三态思考开关：off = 直接出答案，on = 开启，auto = 不干预 */
 export type ThinkingMode = "off" | "on" | "auto";
 
+/**
+ * 启动器配置：一次启动所需的全部输入。
+ *
+ * 约定：值为 `undefined` / `null` / 空串的字段一律**不**传给 llama-server
+ * （让 llama.cpp 用它自己的默认值），而不是传一个"看起来安全"的值。
+ * 末尾的索引签名用于在迁移 v1.9 老配置时保留不认识的键，避免丢数据。
+ */
 export interface LauncherConfig {
   // ---- 运行环境 ----
   /** llama.cpp 构建目录（llama-server.exe 所在目录） */
@@ -254,6 +271,12 @@ export interface BuildInput {
   cpuOnly?: boolean;
 }
 
+/**
+ * {@link buildArgs} 的返回值。
+ *
+ * `argv` 与 `steps` 是一一对应的：凡是出现在 argv 里的参数，都能在 steps 里找到
+ * 它「为什么被传」；凡是没出现在 argv 里的配置项，也能在 steps 里找到「为什么没传」。
+ */
 export interface BuildResult {
   argv: string[];
   env: Record<string, string>;

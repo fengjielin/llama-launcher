@@ -2,6 +2,8 @@
   "name": "llama-launcher",
   "version": "0.2.0",
   "private": true,
+  "author": "fengjielin",
+  "license": "UNLICENSED",
   "type": "module",
   "description": "llama.cpp 启动器：core（零依赖、可 CLI 驱动）+ Electron GUI",
   "main": "out/main/index.js",
@@ -12,6 +14,8 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
+    "package": "electron-vite build && electron-builder --win --dir",
+    "package:portable": "electron-vite build && electron-builder --win portable",
     "test": "node src/test/run-tests.ts",
     "typecheck": "tsc --noEmit",
     "probe": "node src/cli.ts probe",
@@ -19,13 +23,23 @@
     "run": "node src/cli.ts run",
     "cli": "node src/cli.ts"
   },
+  "comment": {
+    "whyElectronGet": "直接依赖 @electron/get@3.1.0 不是为了用它的 API，而是为了修 electron-builder：见 pnpm.overrides 的说明。"
+  },
+  "pnpm": {
+    "overrides": {
+      "app-builder-lib>@electron/get": "3.1.0"
+    }
+  },
   "devDependencies": {
+    "@electron/get": "3.1.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^22.20.2",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
     "electron": "^44.3.0",
+    "electron-builder": "^26.16.1",
     "electron-vite": "^5.0.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",

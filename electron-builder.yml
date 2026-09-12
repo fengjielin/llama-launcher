@@ -1,0 +1,59 @@
+# electron-builder 打包配置
+#
+# 打包产物里**只放启动器自己**（out/ 里的三份产物 + package.json）：
+# llama.cpp 与模型都留在外面 —— 它们是几十 GB 的东西，而且用户本来就会换构建版本
+# （CUDA 12.4 / 13.3、开发版 / 稳定版），打进去反而没法换。
+# 启动器启动时按配置去外面找 llama-server.exe。
+appId: com.llama.launcher
+productName: llama-launcher
+copyright: Copyright 2026
+
+directories:
+  output: dist
+  buildResources: build
+
+# 只打这三样：主进程、preload、渲染层
+files:
+  - out/**/*
+  - package.json
+  - "!**/*.map"
+
+# 关键一：直接复用已经装好的 Electron 发行目录，不走 electron-builder 的
+# 「下载并解压 Electron zip」那条路径。
+#
+# 原因（实测踩坑）：electron-builder 26.x 的 resolveCacheMode 会去读 @electron/get 的
+# ElectronDownloadCacheMode，但它的依赖范围写的是 ^3.0.0，而 3.0.0 并不导出该符号
+# （3.1.0 才导出）。结果打包必然挂在：
+#   TypeError: Cannot read properties of undefined (reading 'ReadWrite')
+#     at resolveCacheMode (app-builder-lib/src/util/electronGet.ts)
+# 指定 electronDist 后那条路径根本不会被走到。
+electronDist: node_modules/electron/dist
+
+# 关键二：不用 asar 打包。
+# 实测在「复用 electronDist」的路径下，electron-builder 生成完 app.asar 后又会去 unlink 它，
+# 报 EBUSY（句柄未释放）导致打包中断；明文目录也更好排查 ——
+# 出问题时可以直接进 resources/app/ 看产物。代价只是产物略大，对本地工具无所谓。
+asar: false
+
+win:
+  # 直接给现成的 .ico（而不是让 electron-builder 从 PNG 转换）：
+  # 它的转换要调用 app-builder 的二进制，在本机报了错；手写 ICO 反而更省事 ——
+  # ICO 里内嵌一张 256x256 的 PNG 是 Windows Vista+ 原生支持的格式。
+  icon: build/icon.ico
+  target:
+    - target: portable
+      arch:
+        - x64
+    - target: nsis
+      arch:
+        - x64
+
+# 便携版：整包一个 exe，配置可以放在它旁边（见 src/main/index.ts 的 defaultConfigPath）
+portable:
+  artifactName: llama-launcher-${version}-portable.exe
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: llama-launcher-${version}-setup.exe

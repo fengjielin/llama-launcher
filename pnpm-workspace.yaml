@@ -1,6 +1,16 @@
-# pnpm 11 默认拦截依赖的构建脚本（安全考虑）。这里显式放行本项目确实需要的两个：
-#   electron —— postinstall 负责下载 Electron 运行时二进制，不跑就没有 electron.exe
-#   esbuild  —— 放置平台原生的 esbuild 可执行文件（vite / electron-vite 依赖它）
+# pnpm 11 默认拦截依赖的构建脚本（安全考虑）。这里显式声明本项目需要的：
+#   electron            —— postinstall 负责下载 Electron 运行时二进制，不跑就没有 electron.exe
+#   esbuild             —— 放置平台原生的 esbuild 可执行文件（vite / electron-vite 依赖它）
+#   electron-winstaller —— 只服务于 Squirrel.Windows 目标；本项目用 portable + nsis，明确不需要
 allowBuilds:
   electron: true
+  electron-winstaller: false
   esbuild: true
+
+# electron-builder 26.x 的 resolveCacheMode 会读 @electron/get 的 ElectronDownloadCacheMode，
+# 而它的依赖范围写的是 ^3.0.0 —— 3.0.0 不导出该符号（3.1.0 才导出），
+# 于是打包必挂在 "Cannot read properties of undefined (reading 'ReadWrite')"。
+# 首次安装时 lockfile 把 3.0.0 钉住了，这里只针对 app-builder-lib 这一个依赖点顶到 3.1.0，
+# 不影响 electron 自己用的 5.x。
+overrides:
+  "app-builder-lib>@electron/get": "3.1.0"

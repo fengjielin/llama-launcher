@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { CommandBar } from "./components/CommandBar.tsx";
 import { DecisionTable } from "./components/DecisionTable.tsx";
 import { LogPane } from "./components/LogPane.tsx";
+import { MetricsPanel } from "./components/MetricsPanel.tsx";
 import { ModelPanel } from "./components/ModelPanel.tsx";
 import { ParamsForm, MODEL_PANEL_KEYS } from "./components/ParamsForm.tsx";
 import { StatusBar } from "./components/StatusBar.tsx";
@@ -9,11 +10,12 @@ import { TopBar } from "./components/TopBar.tsx";
 import { Badge, Button } from "./components/ui.tsx";
 import { useLauncher } from "./hooks/useLauncher.ts";
 
-type Tab = "params" | "decision" | "logs";
+type Tab = "params" | "decision" | "metrics" | "logs";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "params", label: "参数" },
   { id: "decision", label: "决策表" },
+  { id: "metrics", label: "监控" },
   { id: "logs", label: "日志" },
 ];
 
@@ -53,6 +55,13 @@ pnpm build && pnpm start   # 构建后运行</pre>
   const steps = launcher.preview?.steps.length ?? 0;
   // 参数页只展示不在左侧「模型」面板里的项，计数也要跟着一致
   const paramCount = (launcher.schema?.entries ?? []).filter((entry) => !MODEL_PANEL_KEYS.has(entry.key)).length;
+  /** 标签页角标：各页各取一个有代表性的数量 */
+  const tabCount = (id: Tab): number => {
+    if (id === "params") return paramCount;
+    if (id === "decision") return steps;
+    if (id === "metrics") return launcher.metrics?.series.at.length ?? 0;
+    return launcher.logs.length;
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -87,13 +96,7 @@ pnpm build && pnpm start   # 构建后运行</pre>
                 }`}
               >
                 {item.label}
-                <span className="ml-1.5 text-[10px] text-slate-600">
-                  {item.id === "params"
-                    ? paramCount
-                    : item.id === "decision"
-                      ? steps
-                      : launcher.logs.length}
-                </span>
+                <span className="ml-1.5 text-[10px] text-slate-600">{tabCount(item.id)}</span>
               </button>
             ))}
           </nav>
@@ -101,6 +104,8 @@ pnpm build && pnpm start   # 构建后运行</pre>
           <div className="min-h-0 flex-1 overflow-hidden">
             {tab === "params" ? <ParamsForm launcher={launcher} /> : null}
             {tab === "decision" ? <DecisionTable launcher={launcher} /> : null}
+            {/* 监控页自己管采样的开关（挂载开、卸载关），所以只在激活时渲染 */}
+            {tab === "metrics" ? <MetricsPanel launcher={launcher} /> : null}
             {tab === "logs" ? <LogPane launcher={launcher} /> : null}
           </div>
         </main>

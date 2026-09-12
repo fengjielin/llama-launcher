@@ -1,5 +1,6 @@
+import { useState } from "react";
 import type { LauncherController } from "../hooks/useLauncher.ts";
-import { Badge, Button, NumberInput, Select, TextInput } from "./ui.tsx";
+import { Badge, Button, NumberInput, Select, TextInput, Toggle } from "./ui.tsx";
 
 function PathRow({
   label,
@@ -31,7 +32,28 @@ function PathRow({
 }
 
 export function ModelPanel({ launcher }: { launcher: LauncherController }) {
-  const { config, preview, status, busy, detect, update, pick, start, stop, openWebUi } = launcher;
+  const {
+    config,
+    preview,
+    status,
+    busy,
+    detect,
+    profiles,
+    profilesDir,
+    settings,
+    update,
+    pick,
+    start,
+    stop,
+    openWebUi,
+    saveProfileAs,
+    loadProfile,
+    removeProfile,
+    revealProfiles,
+    updateSettings,
+  } = launcher;
+  /** 新档案的输入框内容（纯界面状态，不进配置） */
+  const [profileName, setProfileName] = useState("");
   if (config === null) return null;
 
   const router = config.mode === "router";
@@ -192,6 +214,102 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
             {detect.deprecated.length} 项
           </p>
         ) : null}
+      </section>
+
+      {/* ---- 配置档案：一个档案 = 一个 JSON 文件，随时切换整套「模型 + 参数」 ---- */}
+      <section className="space-y-2 rounded-lg border border-[#1e2530] bg-[#11151d] p-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-semibold text-slate-300">配置档案</span>
+          <Button onClick={() => void revealProfiles()} title={profilesDir === "" ? "档案目录" : profilesDir} className="px-1.5 py-0.5">
+            打开目录
+          </Button>
+        </div>
+        <p className="text-[10px] leading-4 text-slate-500">
+          一个档案 = 目录里的一个 JSON 文件，可以直接拷给别人。载入档案会把它设为当前配置，
+          之后「保存」就写回这套档案。
+        </p>
+        <Select
+          className="w-full"
+          value=""
+          disabled={busy !== null}
+          onChange={(next) => {
+            if (next !== "") void loadProfile(next);
+          }}
+          options={[
+            { value: "", label: profiles.length === 0 ? "（还没有档案）" : "（选择一个档案载入…）" },
+            ...profiles.map((profile) => ({
+              value: profile.name,
+              label: `${profile.name} — ${profile.summary.mode} · ${profile.summary.model}${profile.valid ? "" : " ⚠ 无法解析"}`,
+            })),
+          ]}
+        />
+        <div className="flex gap-1">
+          <TextInput value={profileName} placeholder="新档案名（例如 27B 日常）" onChange={setProfileName} />
+          <Button
+            disabled={busy !== null || profileName.trim() === ""}
+            onClick={() => {
+              const name = profileName.trim();
+              if (name === "") return;
+              void saveProfileAs(name).then(() => setProfileName(""));
+            }}
+          >
+            存为档案
+          </Button>
+        </div>
+        {profiles.length > 0 ? (
+          <div className="flex flex-wrap gap-1">
+            {profiles.map((profile) => (
+              <span
+                key={profile.name}
+                className="inline-flex items-center gap-1 rounded bg-[#1b2230] px-2 py-0.5 text-[11px] text-slate-300"
+                title={`${profile.summary.mode} · 端口 ${profile.summary.port ?? "?"} · ctx ${profile.summary.context ?? "?"}\n${profile.path}`}
+              >
+                {profile.name}
+                <button
+                  type="button"
+                  className="text-slate-500 transition-colors hover:text-rose-300"
+                  title="删除这个档案"
+                  disabled={busy !== null}
+                  onClick={() => void removeProfile(profile.name)}
+                >
+                  ✕
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </section>
+
+      {/* ---- 启动器设置：开机自启与关闭窗口行为 ---- */}
+      <section className="space-y-2 rounded-lg border border-[#1e2530] bg-[#11151d] p-3">
+        <span className="text-xs font-semibold text-slate-300">启动器设置</span>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11px] text-slate-400">开机自启（带 --hidden，只驻留托盘）</span>
+          <Toggle
+            checked={settings?.openAtLogin === true}
+            disabled={busy !== null || settings?.autostartSupported !== true}
+            onChange={(next) => void updateSettings({ openAtLogin: next })}
+          />
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11px] text-slate-400">关闭窗口时缩到托盘（服务继续跑）</span>
+          <Toggle
+            checked={settings?.minimizeToTray === true}
+            disabled={busy !== null}
+            onChange={(next) => void updateSettings({ minimizeToTray: next })}
+          />
+        </div>
+        {settings !== null && !settings.autostartSupported ? (
+          <p className="text-[10px] leading-4 text-slate-500">
+            当前平台不支持开机自启（Linux 需要安装桌面项，暂未实现）。
+          </p>
+        ) : null}
+        {settings?.minimizeToTray === true ? (
+          <p className="text-[10px] leading-4 text-slate-500">
+            已开启缩到托盘：点窗口的 ✕ 只是隐藏，服务不会停；真正退出请用托盘菜单的「退出」。
+          </p>
+        ) : null}
+        <p className="break-all text-[10px] leading-4 text-slate-500">设置文件：{settings?.settingsPath ?? "读取中…"}</p>
       </section>
     </aside>
   );

@@ -1,17 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { getApi } from "../api.ts";
 import type { LauncherConfig } from "../../../core/types.ts";
+import type { ProfileInfo } from "../../../core/profiles.ts";
 import { isErrorPayload } from "../../../shared/ipc.ts";
 import type {
+  AppSettings,
+  AppSettingsPayload,
   BootstrapPayload,
   DetectPayload,
   LogPush,
+  MetricsPayload,
   PickKind,
   PreviewPayload,
   SchemaPayload,
   StartPayload,
   StatusPayload,
 } from "../../../shared/ipc.ts";
-import { getApi } from "../api.ts";
 
 /** 界面最多保留多少行日志（主进程侧另有一份 4000 条的缓冲，用于失败诊断） */
 const LOG_LIMIT = 3000;
@@ -42,6 +46,14 @@ export interface LauncherController {
   lastStart: StartPayload | null;
   logs: LogPush[];
   status: StatusPayload | null;
+  /** 指标快照（含历史序列）；还没打开过监控页时为 `null` */
+  metrics: MetricsPayload | null;
+  /** 配置档案列表 */
+  profiles: ProfileInfo[];
+  /** 档案目录（界面上展示，方便用户直接去拷文件） */
+  profilesDir: string;
+  /** 应用设置（开机自启、关闭窗口行为） */
+  settings: AppSettingsPayload | null;
   update: (patch: Partial<LauncherConfig>) => void;
   refreshSchema: () => Promise<void>;
   start: () => Promise<void>;
@@ -54,6 +66,18 @@ export interface LauncherController {
   pick: (key: string, kind: PickKind, title?: string) => Promise<void>;
   clearLogs: () => void;
   dismissError: () => void;
+  /** 开关实时指标采样（切到监控页时开、离开时关） */
+  watchMetrics: (active: boolean) => void;
+  /** 把当前配置另存为一个档案 */
+  saveProfileAs: (name: string) => Promise<void>;
+  /** 载入档案（会把它设为当前配置） */
+  loadProfile: (name: string) => Promise<void>;
+  /** 删除档案 */
+  removeProfile: (name: string) => Promise<void>;
+  /** 在资源管理器里打开档案目录 */
+  revealProfiles: () => Promise<void>;
+  /** 修改应用设置 */
+  updateSettings: (patch: Partial<AppSettings>) => Promise<void>;
 }
 
 /**
@@ -96,6 +120,10 @@ export function useLauncher(): LauncherController {
   const [lastStart, setLastStart] = useState<StartPayload | null>(null);
   const [logs, setLogs] = useState<LogPush[]>([]);
   const [status, setStatus] = useState<StatusPayload | null>(null);
+  const [metrics, setMetrics] = useState<MetricsPayload | null>(null);
+  const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
+  const [profilesDir, setProfilesDir] = useState("");
+  const [settings, setSettings] = useState<AppSettingsPayload | null>(null);
 
   /**
    * 用一次初始化载荷整体替换本地状态（启动、打开配置、导入 v1.9 后都走它）。
@@ -131,6 +159,14 @@ export function useLauncher(): LauncherController {
     setDetectError(result.ok ? null : (result.failure ?? null));
   }, [api]);
 
+  /** 重新拉档案列表（保存/删除之后调用，保证列表与磁盘一致） */
+  const refreshProfiles = useCallback(async () => {
+    if (api === null) return;
+    const payload = await api.listProfiles();
+    setProfiles(payload.profiles);
+    setProfilesDir(payload.dir);
+  }, [api]);
+
   // ---- 初始化：拉配置 + 订阅推送 + 探测能力 ----
   // `disposed` 用于防止"请求还没回来组件就卸载/重挂"造成的过期 setState；
   // 订阅的清理函数同样在卸载时执行，因此 React StrictMode 的双次调用是安全的
@@ -157,6 +193,12 @@ export function useLauncher(): LauncherController {
         setStatus(current);
 
         await refreshSchema();
+        if (disposed) return;
+
+        // 档案与应用设置：都不重要到需要阻塞界面，失败就保持空状态
+        await refreshProfiles();
+        if (disposed) return;
+        setSettings(await api.getSettings());
       } catch (err) {
         if (!disposed) setError(message(err));
       } finally {
@@ -174,13 +216,18 @@ export function useLauncher(): LauncherController {
     const offState = api.onState((push) => {
       setStatus((prev) => (prev === null ? prev : { ...prev, state: push.state, note: push.note }));
     });
+    // 指标推送：载荷里已带完整历史序列，直接替换即可
+    const offMetrics = api.onMetrics((payload) => setMetrics(payload));
 
     return () => {
       disposed = true;
       offLog();
       offState();
+      offMetrics();
+      // 卸载时务必关掉采样，否则会一直每秒钟起一个 nvidia-smi 进程
+      void api.metricsWatch(false);
     };
-  }, [api, reloadFrom, refreshSchema]);
+  }, [api, reloadFrom, refreshSchema, refreshProfiles]);
 
   // ---- 配置变化 → 防抖后重拼命令行 ----
   // busy 不为空时（正在启动/停止/保存）先不重拼：那期间配置本来就不会变，
@@ -379,6 +426,85 @@ export function useLauncher(): LauncherController {
   /** 关掉顶部的错误横幅 */
   const dismissError = useCallback(() => setError(null), []);
 
+  /**
+   * 开关实时指标采样。
+   *
+   * 打开时顺手拉一次快照，避免监控面板先空等一秒才有数据；
+   * 关闭时只停采样不清历史 —— 切回来还能看到之前的曲线。
+   */
+  const watchMetrics = useCallback(
+    (active: boolean) => {
+      if (api === null) return;
+      void api.metricsWatch(active);
+      if (active) {
+        void api.metricsSnapshot().then(setMetrics).catch(() => undefined);
+      }
+    },
+    [api],
+  );
+
+  /**
+   * 把**当前界面上的配置**另存为一个档案。
+   *
+   * 传的是内存里的配置而不是磁盘上的那份，因此"改完参数直接存成档案"也能生效。
+   * 同名会覆盖（档案名会被主进程规整成安全文件名）。
+   */
+  const saveProfileAs = useCallback(
+    (name: string) =>
+      run("saveProfile", async () => {
+        if (api === null || config === null) return;
+        const result = await api.saveProfile(name, config);
+        setProfiles(result.profiles);
+      }),
+    [api, config, run],
+  );
+
+  /** 载入档案：它会被设为当前配置，因此要重新探测能力并刷新列表 */
+  const loadProfile = useCallback(
+    (name: string) =>
+      run("loadProfile", async () => {
+        if (api === null) return;
+        const result = await api.loadProfile(name);
+        if (result.payload !== null) reloadFrom(result.payload);
+        if (result.warnings.length > 0) setWarnings(result.warnings);
+        await refreshSchema();
+        await refreshProfiles();
+      }),
+    [api, refreshProfiles, refreshSchema, reloadFrom, run],
+  );
+
+  /** 删除档案（主进程侧是幂等的，重复删不报错） */
+  const removeProfile = useCallback(
+    (name: string) =>
+      run("removeProfile", async () => {
+        if (api === null) return;
+        const result = await api.deleteProfile(name);
+        setProfiles(result.profiles);
+      }),
+    [api, run],
+  );
+
+  /** 在资源管理器里打开档案目录（方便拷给别的机器） */
+  const revealProfiles = useCallback(
+    () =>
+      run("revealProfiles", async () => {
+        if (api === null) return;
+        const result = await api.revealProfiles();
+        setProfilesDir(result.dir);
+      }),
+    [api, run],
+  );
+
+  /** 修改应用设置（开机自启 / 关闭窗口行为），返回值即最新设置 */
+  const updateSettings = useCallback(
+    (patch: Partial<AppSettings>) =>
+      run("updateSettings", async () => {
+        if (api === null) return;
+        setSettings(await api.setSettings(patch));
+      }),
+    [api, run],
+  );
+
   return {
     ready,
     bridgeMissing,
@@ -395,6 +521,10 @@ export function useLauncher(): LauncherController {
     lastStart,
     logs,
     status,
+    metrics,
+    profiles,
+    profilesDir,
+    settings,
     update,
     refreshSchema,
     start,
@@ -407,5 +537,11 @@ export function useLauncher(): LauncherController {
     pick,
     clearLogs,
     dismissError,
+    watchMetrics,
+    saveProfileAs,
+    loadProfile,
+    removeProfile,
+    revealProfiles,
+    updateSettings,
   };
 }

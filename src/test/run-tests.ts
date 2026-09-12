@@ -8,9 +8,16 @@
  * 用法：node src/test/run-tests.ts   （或 pnpm test）
  */
 
+// ---- M1：core 层 ----
 import "./helpProbe.test.ts";
 import "./presets.test.ts";
 import "./args.test.ts";
 import "./config.test.ts";
 import "./logLines.test.ts";
 import "./health.test.ts";
+
+// ---- M3：指标采集与档案管理 ----
+import "./gpu.test.ts";
+import "./sysinfo.test.ts";
+import "./metrics.test.ts";
+import "./profiles.test.ts";

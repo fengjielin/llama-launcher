@@ -85,6 +85,7 @@ llama-launcher/
 │  └─ health.ts        TCP 探测 / /health 语义 / 端口顺延
 ├─ src/cli.ts          命令行入口
 ├─ src/test/           单测（进程内运行，见下文"测试"）
+├─ scripts/package.mjs 打包入口：生成 .electron-dist 过滤镜像 + 输出目录兜底
 └─ fixtures/           实测采集的真实数据（help / version / presets / 冒烟配置）
 ```
 
@@ -317,11 +318,39 @@ Windows 与 macOS 支持；Linux 需要安装 `.desktop` 项，暂未实现（�
 ```powershell
 pnpm package            # → dist/win-unpacked/ ：免安装目录，双击 llama-launcher.exe 即用
 pnpm package:portable   # → 单文件便携版（当前受阻，见下）
+pnpm package:check      # 只做打包前诊断：报告哪个文件被占用、本次会输出到哪里
 ```
 
 产物里**只有启动器自己**（`out/` 三份产物 + `package.json`）：llama.cpp 与模型都留在外面 ——
 它们是几十 GB 的东西，而且你本来就会换构建版本，打进去反而没法换。启动器启动时按配置去找
 `llama-server.exe`。
+
+#### 为什么要经过 `scripts/package.mjs`
+
+不是包装，而是绕开两个真实存在的坑：
+
+1. **让产物里不出现任何 `.asar` 文件。** 自定义 `electronDist` 时 electron-builder 走的是
+   "custom unpacked Electron distribution" 分支，它做三件事：
+   `emptyDir(appOutDir)` → `copyDir(发行目录 → 产物)` → `return false`。
+   最后那个 `false` 让 `isFullCleanup=false`，于是 `cleanupAfterUnpack()` 里
+   `unlinkIfExists(产物/resources/default_app.asar)` **被整个跳过**（不是「删失败」，是压根不删）。
+   结果每个产物里都会留一份 Electron 自带的 `default_app.asar`，而下一次打包开头的
+   `emptyDir(appOutDir)` 必须把它删掉 —— 那一步不吞错误，于是一旦它被别的进程占用，
+   整个打包就以 `EBUSY: resource busy or locked, unlink '...\default_app.asar'` 中断。
+   脚本生成的 `.electron-dist/` 是发行目录的**过滤镜像**（跳过这个 asar，其余 72 个文件用 NTFS
+   硬链接指过去，不占额外空间），`electron-builder.yml` 的 `electronDist` 指向它；再加上
+   `asar: false`，产物里就一个 `.asar` 都没有了。
+2. **清理失败就换目录，而不是让整个打包失败。** 万一还有别的文件被占用（比如刚生成的 exe 正被杀软
+   扫描），脚本会把占用文件逐条列出来、自动改用带时间戳的备用目录
+   `dist-fallback-<yyyyMMddHHmmss>`，并告诉你两条出路（重启释放 / 加白名单）。
+
+输出目录默认是项目内的 `dist/`，可以用环境变量改到工作区之外：
+
+```powershell
+$env:LLAMA_PACKAGE_OUT='E:\llama-launcher-dist'
+pnpm package
+```
+
 
 ### 数据放哪儿：便携优先
 
@@ -376,12 +405,12 @@ exe 旁边还没有配置时，启动过程是「**生成 → 重新读一遍**�
 **已实测**：打包出的 `llama-launcher.exe` 能独立运行，自己探测到 `E:\Code\llama\llama.cpp`，
 自检面板正常显示「构建需要 CUDA 12 / 驱动支持 12.7 / RTX 4060 Ti」。
 
-#### 打包时踩的三个坑（都写进 `electron-builder.yml` 注释了）
+#### 打包时踩的四个坑（前三个写进 `electron-builder.yml` 注释，第四个写进 `scripts/package.mjs`）
 
 1. **electron-builder 26.x 有个上游 bug**：它的 `resolveCacheMode` 读 `@electron/get` 的
    `ElectronDownloadCacheMode`，但依赖范围写的是 `^3.0.0`，而 **3.0.0 并不导出该符号**（3.1.0 才导出），
    于是报 `Cannot read properties of undefined (reading 'ReadWrite')`。
-   绕法：`electronDist: node_modules/electron/dist` —— 直接复用装好的 Electron 发行目录，不走那条下载路径。
+   绕法：`electronDist` 指向已解压的发行目录，不走那条下载路径。
 2. **同一个 bug 也卡住安装包**：`portable` / `nsis` 目标要下载 7za、NSIS 工具链，走的还是那条坏路径，
    因此**单文件安装包目前打不出来**（`--dir` 免安装目录不受影响）。
    彻底的修法是把 `@electron/get` 提到 3.1.0 并让 `app-builder-lib` 用上它 ——
@@ -389,10 +418,21 @@ exe 旁边还没有配置时，启动过程是「**生成 → 重新读一遍**�
    `app-builder-lib` 的那份嵌套副本上，还需要再想办法（`pnpm patch` 或清理 lockfile 重装）。
 3. **图标给现成的 `.ico`**，不要让 electron-builder 从 PNG 转换（它的转换要调 app-builder 的二进制，本机报错）。
    `build/icon.ico` 是手写的：ICO 头 + 内嵌一张 256×256 PNG（Windows Vista+ 原生支持这种形式）。
+4. **产出的 `.asar` 会被本机的常驻进程长期占用，进而毒掉下一次打包**（详见「为什么要经过
+   `scripts/package.mjs`」）。这里补一个实测数据，因为它决定了怎么修：本机残留的 4 个 `.asar`
+   在**几个小时之后**依然处于「可正常读取、但改不了名也删不掉」的状态；而同一目录下新建的普通文件
+   （含一个内容仿造的 `.asar`）都能立刻改名/删除。当前在跑的相关进程是火绒
+   （`HipsDaemon` / `HipsTray`）、Everything 与 Windows 搜索 —— 大概率是其中之一在解析 `.asar`。
 
-> 环境相关提醒：如果在**受管沙箱**里跑打包，输出目录必须放在工作区之外
-> （`--config.directories.output=<工作区外的路径>`），否则工作区的文件观察层会持有刚生成的文件，
-> 让 electron-builder 的 unlink 报 `EBUSY`。在你自己的终端里没这个问题。
+> **已经残留的目录怎么办**：`dist\win-unpacked`、`release\win-unpacked`（早期试过的输出目录）以及
+> `dist-fallback-*` 里面那些 `.asar` 现在还删不掉，**重启一次电脑即可释放**，之后
+> `pnpm package` 会自动回到 `dist/`（本次实测：往干净目录连续打包两次都成功，第二次清理掉了上一次的 95 项产物，
+> 正是原先必然 EBUSY 的那一步）。
+> 想一劳永逸：把项目目录与输出目录加进火绒的**信任区**，或在 Everything 里关掉内容索引。
+
+> 另一条早期误判也顺便纠正一下：先前以为是「受管沙箱的文件观察层持有刚生成的文件，所以在工作区里打包才报
+> `EBUSY`，用户自己的终端没问题」。**结论是错的** —— 你在自己的终端里跑 `pnpm run package` 复现了同样的错误。
+> 真实原因是上面第 4 条：产物里的 `.asar` 被常驻进程占用，与在哪个终端、哪个目录构建无关。
 
 ## 下一步（M5）
 

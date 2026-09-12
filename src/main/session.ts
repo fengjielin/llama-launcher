@@ -5,7 +5,7 @@
  * 于是它可以被 CLI、被单测直接驱动，而不是只能通过点界面来验证。
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { formatArgv } from "../core/args.ts";
 import {
@@ -19,6 +19,8 @@ import {
 } from "../core/config.ts";
 import { fetchHealth, findFreePort, probeTcp } from "../core/health.ts";
 import { createCapabilities } from "../core/helpProbe.ts";
+import { mergePresets, parsePresetsIni, presetsJsonFromPresetFile } from "../core/presets.ts";
+import type { PresetJson } from "../core/presets.ts";
 import { prepareLaunch, probeServer } from "../core/launcher.ts";
 import { LlamaServer } from "../core/llamaProcess.ts";
 import type { ServerState } from "../core/llamaProcess.ts";
@@ -169,12 +171,22 @@ export class LauncherSession {
   private reloadConfig(): void {
     if (!existsSync(this.configPath)) {
       const layout = discoverModelLayout({ startDirs: this.searchStartDirs() });
+      // presets.ini 现在是导入来源：直接把内容转成配置里的 JSON 预设（新配置不带 models_preset 路径）
+      let presets: PresetJson = {};
+      if (layout.presetPath !== "") {
+        try {
+          presets = presetsJsonFromPresetFile(parsePresetsIni(readFileSync(layout.presetPath, "utf8")));
+        } catch {
+          // 读不出来就当没有预设：首次运行不该因为一个坏文件起不来
+          presets = {};
+        }
+      }
       const initial: LauncherConfig = {
         ...DEFAULT_CONFIG,
         llama_dir: layout.llamaDir ?? "",
         mode: layout.mode,
         models_dir: layout.modelsDirExists ? layout.modelsDirCandidate : "",
-        models_preset: layout.presetPath,
+        presets,
         preload_model: layout.preloadModel,
       };
 
@@ -205,10 +217,14 @@ export class LauncherSession {
           "没能自动探测到 llama.cpp 目录，请在左侧「构建目录」里指定（或设置环境变量 LLAMA_DIR / LLAMA_SERVER）",
         );
       }
-      // 探到什么都如实说出来：模型目录与 presets.ini 直接决定了 router 模式能不能用
+      // 探到什么都如实说出来：模型目录与预设直接决定了 router 模式能不能用
       if (layout.modelsDirExists) this.configNotices.push(`已自动探测到模型目录：${layout.modelsDirCandidate}`);
       if (layout.presetPath !== "") {
-        this.configNotices.push(`已自动探测到 presets.ini：${layout.presetPath}（运行模式已设为 router）`);
+        const count = Object.keys(presets).length;
+        this.configNotices.push(
+          `已自动探测到 presets.ini：${layout.presetPath}（运行模式已设为 router）` +
+            (count > 0 ? `，其中 ${count} 个模型的预设已导入配置的 presets 字段` : ""),
+        );
       }
       if (layout.preloadModel !== "") {
         this.configNotices.push(`按 presets.ini 的 default-model 约定设置了预加载：${layout.preloadModel}`);
@@ -220,6 +236,10 @@ export class LauncherSession {
     this.config = loaded.config;
     this.configWarnings = loaded.warnings;
     this.configNotices = [];
+    // 老配置里的 models_preset（ini 路径）一次性并进 presets，否则用户会觉得"配了没生效"
+    const legacy = this.importLegacyPresets();
+    this.configNotices.push(...legacy.notices);
+    this.configWarnings.push(...legacy.warnings);
   }
 
   /**
@@ -272,6 +292,91 @@ export class LauncherSession {
     this.configPath = path;
     this.invalidateCapabilities();
     this.reloadConfig();
+    return this.bootstrapPayload();
+  }
+
+  /**
+   * 把旧的 `models_preset`（presets.ini 路径）一次性并进配置的 `presets` 字段。
+   *
+   * 为什么要有这一步：预设原先是一个外部 ini，现在以配置里的 JSON 表为准。
+   * 老配置里只有路径 —— 不导入的话，用户会看到"配了预设却没生效"。
+   *
+   * 只在**预设表为空**时导入，且导入结果留在内存里（点「保存」才落盘），
+   * 这样不会在用户没同意的情况下改写他的配置文件；同名模型不覆盖（见 `mergePresets`）。
+   *
+   * @returns 给用户看的通知与告警（没有可导入的东西时返回空数组）
+   */
+  private importLegacyPresets(): { notices: string[]; warnings: string[] } {
+    const legacy = this.config.models_preset;
+    if (typeof legacy !== "string" || legacy === "") return { notices: [], warnings: [] };
+    if (Object.keys(this.config.presets ?? {}).length > 0) return { notices: [], warnings: [] };
+
+    let text: string;
+    try {
+      text = readFileSync(legacy, "utf8");
+    } catch {
+      return {
+        notices: [],
+        warnings: [
+          `配置里的 models_preset（${legacy}）已不再直接传给 llama-server，而这个文件读不到；` +
+            "预设现在写在配置的 presets 字段里，可在界面点「导入 presets.ini…」重新选一个文件",
+        ],
+      };
+    }
+
+    const file = parsePresetsIni(text);
+    const imported = presetsJsonFromPresetFile(file);
+    const models = Object.keys(imported);
+    if (models.length === 0) return { notices: [], warnings: [] };
+
+    this.config = { ...this.config, presets: imported };
+    // 旧 ini 的 `; default-model =` 约定对应配置里的 preload_model，只有用户没设过才补上
+    if (file.defaultModel !== null && (this.config.preload_model ?? "") === "") {
+      this.config = { ...this.config, preload_model: file.defaultModel };
+    }
+
+    return {
+      notices: [
+        `已从 ${legacy} 导入 ${models.length} 个模型的预设到配置（现在以配置里的 presets 为准，点「保存」写入文件）`,
+      ],
+      warnings: [],
+    };
+  }
+
+  /**
+   * 从用户选中的 `presets.ini` 导入预设到配置，并立即写盘。
+   *
+   * 与 {@link importLegacyPresets} 的区别：这是用户主动点的，所以直接保存
+   * （否则他点了导入却还得再点一次保存，很容易以为没生效）。
+   *
+   * @param path 选中的 presets.ini 路径
+   * @returns 新的初始化载荷；`notices` 里说明导入了几个模型、跳过了哪些同名模型
+   * @throws {Error} 文件读不到或不是合法文本时抛出（由 `readFileSync` 抛出）
+   */
+  importPresetsFromFile(path: string): BootstrapPayload {
+    const file = parsePresetsIni(readFileSync(path, "utf8"));
+    const imported = presetsJsonFromPresetFile(file);
+    const models = Object.keys(imported);
+    if (models.length === 0) {
+      this.configNotices = [`${path} 里没有可导入的模型段（[defaults] 之类的自用段会被忽略）`];
+      return this.bootstrapPayload();
+    }
+
+    const { presets, added, skipped } = mergePresets(this.config.presets ?? {}, imported);
+    const next: LauncherConfig = { ...this.config, presets, models_preset: path };
+    if (file.defaultModel !== null && (this.config.preload_model ?? "") === "") {
+      next.preload_model = file.defaultModel;
+    }
+
+    const { config: normalized, warnings } = normalizeConfig(next);
+    saveConfigFile(this.configPath, normalized);
+    this.config = normalized;
+    this.invalidateCapabilities();
+    this.configWarnings = warnings;
+    this.configNotices = [
+      `已从 ${path} 导入 ${added.length} 个模型的预设并写入配置`,
+      ...(skipped.length > 0 ? [`同名模型保持配置里原有的预设，未覆盖：${skipped.join("、")}`] : []),
+    ];
     return this.bootstrapPayload();
   }
 
@@ -636,7 +741,8 @@ export class LauncherSession {
           modelSizeMiB: null,
           modelMagicOk: null,
           portFree: null,
-          presetPathNonAscii: false,
+          presetModelCount: 0,
+          legacyPresetPath: "",
         },
       };
       this.lastPrecheck = report;

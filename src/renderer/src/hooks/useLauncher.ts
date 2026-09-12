@@ -71,6 +71,8 @@ export interface LauncherController {
   openConfig: () => Promise<void>;
   save: () => Promise<void>;
   saveAs: () => Promise<void>;
+  /** 从 presets.ini 导入模型预设到配置（预设以配置里的 presets 字段为准） */
+  importPresets: () => Promise<void>;
   openWebUi: () => Promise<void>;
   pick: (key: string, kind: PickKind, title?: string) => Promise<void>;
   clearLogs: () => void;
@@ -366,6 +368,25 @@ export function useLauncher(): LauncherController {
     [api, refreshSchema, reloadFrom, run],
   );
 
+  /**
+   * 从 presets.ini 导入模型预设（并进配置的 `presets` 字段）。
+   *
+   * 导入成功后主进程已经写盘，所以这里整体刷新一次载荷 ——
+   * 与"打开配置"同样的道理：预设变了，参数接管关系与决策表都得跟着重算。
+   */
+  const importPresets = useCallback(
+    () =>
+      run("importPresets", async () => {
+        if (api === null) return;
+        const result = await api.importPresets();
+        if (result.canceled) return;
+        if (result.payload !== null) reloadFrom(result.payload);
+        if (result.warnings.length > 0) setWarnings(result.warnings);
+        await refreshSchema();
+      }),
+    [api, refreshSchema, reloadFrom, run],
+  );
+
   /** 保存到当前配置文件；保存会重新归一化，所以要用返回的告警刷新提醒区 */
   const save = useCallback(
     () =>
@@ -548,6 +569,7 @@ export function useLauncher(): LauncherController {
     openConfig,
     save,
     saveAs,
+    importPresets,
     openWebUi,
     pick,
     clearLogs,

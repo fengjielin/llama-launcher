@@ -24,6 +24,8 @@ export const IPC = {
   configSave: "config:save",
   /** 另存为 */
   configSaveAs: "config:saveAs",
+  /** 从 presets.ini 导入模型预设到配置的 presets 字段 */
+  presetsImport: "presets:import",
   /** 弹系统文件/目录选择框 */
   pickPath: "dialog:pickPath",
   /** 现场跑 --version/--help，重算能力视图 */
@@ -324,6 +326,12 @@ export interface LlamaApi {
   openConfig(): Promise<ConfigFileResult>;
   saveConfig(config: LauncherConfig): Promise<{ ok: boolean; path: string; warnings: string[] }>;
   saveConfigAs(config: LauncherConfig): Promise<{ canceled: boolean; path: string | null }>;
+  /**
+   * 选一个 presets.ini 把里面的模型预设并进配置（预设现在以配置里的 `presets` 字段为准）。
+   *
+   * 取消时 `canceled` 为 true；失败时 `warnings` 里带原因（界面不崩）。
+   */
+  importPresets(): Promise<ConfigFileResult>;
   pickPath(request: PickPathRequest): Promise<PickPathResult>;
   detect(): Promise<DetectPayload | ErrorPayload>;
   /** 环境自检：驱动是否配得上这份构建、运行时 DLL 齐不齐、模型能不能装下等 */

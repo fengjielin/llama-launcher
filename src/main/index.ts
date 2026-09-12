@@ -456,6 +456,25 @@ function registerIpc(): void {
     return { canceled: false, path, payload, warnings: payload.warnings };
   });
 
+  ipcMain.handle(IPC.presetsImport, async (): Promise<ConfigFileResult> => {
+    const picked = await showOpen({
+      title: "选择 presets.ini（内容会并进配置的 presets 字段）",
+      filters: [{ name: "ini 配置", extensions: ["ini"] }],
+      properties: ["openFile"],
+    });
+    const path = picked.filePaths[0];
+    if (picked.canceled || path === undefined) return { canceled: true, path: null, payload: null, warnings: [] };
+    try {
+      const payload = s().importPresetsFromFile(path);
+      return { canceled: false, path, payload, warnings: payload.warnings };
+    } catch (err) {
+      // 选错文件 / 文件坏了不该让界面崩掉：退回当前状态并把原因放进 warnings
+      const message = err instanceof Error ? err.message : String(err);
+      const payload = s().bootstrap();
+      return { canceled: false, path: null, payload, warnings: [`导入失败：${message}`] };
+    }
+  });
+
   // 通用路径选择：模型/目录/presets.ini 都由界面发起，这里按 kind 决定选文件还是选目录
   ipcMain.handle(IPC.pickPath, async (_e, request: PickPathRequest): Promise<PickPathResult> => {
     const filters = DIALOG_FILTERS[request.kind] ?? [];

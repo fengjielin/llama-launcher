@@ -77,6 +77,7 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
     removeProfile,
     revealProfiles,
     updateSettings,
+    importPresets,
   } = launcher;
   /** 新档案的输入框内容（纯界面状态，不进配置） */
   const [profileName, setProfileName] = useState("");
@@ -84,13 +85,15 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
 
   const router = config.mode === "router";
   const running = status?.running === true;
+  /** 配置里定义了预设的模型名（预设现在存在配置里，不再是外部 ini） */
+  const presetNames = Object.keys(config.presets ?? {});
   const presetModels = preview?.preset?.models ?? [];
   const preloadValue = typeof config.preload_model === "string" ? config.preload_model : "";
   const preloadOptions = [
     { value: "", label: "（不预加载，首次请求才加载）" },
     ...presetModels.map((model) => ({ value: model, label: model })),
     ...(preloadValue !== "" && !presetModels.includes(preloadValue)
-      ? [{ value: preloadValue, label: `${preloadValue}（不在 presets.ini 里）` }]
+      ? [{ value: preloadValue, label: `${preloadValue}（不在配置预设里）` }]
       : []),
   ];
 
@@ -146,7 +149,7 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
         </div>
         <p className="text-[10px] leading-4 text-slate-500">
           {router
-            ? "router 模式：网页左上角可随时切换模型，无需重启；presets.ini 里定义过的键由 preset 按模型接管。"
+            ? "router 模式：网页左上角可随时切换模型，无需重启；配置里 presets 定义过的键由 preset 按模型接管。"
             : "单模型模式：一次只起一个 -m 指定的模型，所有参数都由命令行决定。"}
         </p>
       </section>
@@ -160,22 +163,31 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
               label="模型目录（--models-dir）"
               value={typeof config.models_dir === "string" ? config.models_dir : ""}
               placeholder="点「浏览…」或「填入探测值」"
-              hint="router 模式必须有它：llama-server 靠这个目录列出可用模型，空着起来后一个模型都没有（presets.ini 不能代替它）"
+              hint="router 模式必须有它：llama-server 靠这个目录列出可用模型，空着起来后一个模型都没有（预设 presets 不能代替它）"
               suggestion={suggestions.modelsDir}
               onUseSuggestion={(path) => update({ models_dir: path })}
               onPick={() => void pick("models_dir", "directory", "选择模型目录")}
               onChange={(next) => update({ models_dir: next ?? "" })}
             />
-            <PathRow
-              label="模型预设文件（--models-preset）"
-              value={typeof config.models_preset === "string" ? config.models_preset : ""}
-              placeholder="…\presets.ini"
-              hint="可选：只负责给各模型覆盖参数；路径含中文时会自动拷到临时目录再传（直接传会让 llama-server 崩退）"
-              suggestion={suggestions.presetPath}
-              onUseSuggestion={(path) => update({ models_preset: path })}
-              onPick={() => void pick("models_preset", "ini", "选择 presets.ini")}
-              onChange={(next) => update({ models_preset: next ?? "" })}
-            />
+            <div className="space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] text-slate-400">模型预设（presets）</span>
+                <Button onClick={() => void importPresets()} className="px-1.5 py-0.5">
+                  导入 presets.ini…
+                </Button>
+              </div>
+              <p className="text-[10px] leading-4 text-slate-500">
+                {presetNames.length === 0
+                  ? "还没有预设：每个模型都用同一套命令行参数。"
+                  : `已为 ${presetNames.length} 个模型定义预设：${presetNames.join("、")}`}
+              </p>
+              <p className="text-[10px] leading-4 text-slate-500">
+                预设就写在配置文件的 <span className="mono">presets</span> 字段里（模型名 → 参数表，
+                键名用 llama.cpp 自己的，如 <span className="mono">ctx-size</span> /
+                <span className="mono">cache-type-k</span> / <span className="mono">fit-target</span>），
+                可以直接编辑；启动时由启动器渲染成临时 ini 传给 llama-server。
+              </p>
+            </div>
             <div className="space-y-1">
               <span className="text-[11px] text-slate-400">启动预加载模型</span>
               <Select

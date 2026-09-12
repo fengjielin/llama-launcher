@@ -93,10 +93,10 @@ function controlFor(
  * - `未探测`：还没跑过 `--help`，支持情况未知
  * - `已废弃`：命中的参数在 help 里被标了 `DEPRECATED`
  * - `preset 接管`：**仅当该参数有值时才显示** —— 没配却提示"被 preset 接管"会让人误解；
- *   含义是"命令行不会再传它，改由 presets.ini 决定"
+ *   含义是"命令行不会再传它，改由配置里的 presets 决定"
  *
  * @param entry 参数定义（提供支持情况、实际参数名、preset 键）
- * @param presetOwned 该参数的 preset 键是否出现在 presets.ini 的模型段里
+ * @param presetOwned 该参数的 preset 键是否出现在配置的 presets 里
  * @param raw 该参数的当前配置值（用于判断"有没有配"）
  * @returns 徽标节点；都不满足时返回空片段
  */
@@ -134,7 +134,7 @@ function Badges({
       text: "preset 接管",
       tone: "violet",
       title:
-        "presets.ini 的模型段里定义过这个键，命令行不会再传它（实测命令行优先级更高，传了会盖掉 preset）。预加载的模型除外。",
+        "配置里的 presets 为某个模型定义过这个键，命令行不会再传它（实测命令行优先级更高，传了会盖掉 preset）。预加载的模型除外。",
     });
   }
 

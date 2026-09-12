@@ -130,15 +130,15 @@ function firstLine(text: string): string {
 }
 
 /**
- * 把 presets.ini 的解析结果打包给界面。
+ * 把模型预设打包给界面。
  *
- * `staged` 的判定是"实际传入路径 ≠ 原路径"：只要启动器改动过这份文件
- * （非 ASCII 路径转存、或剔除了启动器自用段），界面就该提示用户"传给 llama-server 的
- * 不是你选的那个文件"。
+ * `staged` 的判定是"实际传入路径 ≠ 配置里那个旧路径"：预设现在由启动器从配置的 `presets`
+ * 渲染成临时 ini，所以只要配置里还留着旧的 `models_preset` 路径，这里就是 `true` ——
+ * 含义是"传给 llama-server 的不是那个文件，而是渲染出来的临时文件"。
  *
- * @param preset 解析结果；`null` 表示这次启动没有用 presets.ini
- * @param argPath 实际传给 `--models-preset` 的路径
- * @param originalPath 配置里写的原始路径（用于与 `argPath` 比较判断是否转存过）
+ * @param preset 预设的内存形态；`null` 表示这次启动没有任何预设
+ * @param argPath 实际传给 `--models-preset` 的路径（渲染出的临时文件）
+ * @param originalPath 配置里遗留的 `models_preset` 路径（仅用于比较，可为 `null`）
  * @returns 界面用的 presets 载荷；`preset` 为 `null` 时直接返回 `null`
  */
 export function buildPresetPayload(
@@ -170,7 +170,7 @@ export function buildPresetPayload(
  * 格式化好的 `argvText`（渲染层因此不必再实现一遍参数拼接）。
  *
  * @param prepared `prepareLaunch` 的结果
- * @param originalPresetPath 配置里写的 presets 原始路径，用于判断是否发生过转存
+ * @param originalPresetPath 配置里遗留的 `models_preset` 路径（用于判断传给服务器的是不是临时文件）
  * @returns 预览载荷，见 `PreviewPayload`
  */
 export function buildPreviewPayload(prepared: PrepareResult, originalPresetPath: string | null): PreviewPayload {

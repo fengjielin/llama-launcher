@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { getApi } from "../api.ts";
 import type { LauncherConfig } from "../../../core/types.ts";
 import type { ProfileInfo } from "../../../core/profiles.ts";
+import type { PrecheckReport } from "../../../core/precheck.ts";
 import { isErrorPayload } from "../../../shared/ipc.ts";
 import type {
   AppSettings,
@@ -54,8 +55,12 @@ export interface LauncherController {
   profilesDir: string;
   /** 应用设置（开机自启、关闭窗口行为） */
   settings: AppSettingsPayload | null;
+  /** 环境自检报告（驱动/CUDA 运行时/模型/端口） */
+  precheck: PrecheckReport | null;
   update: (patch: Partial<LauncherConfig>) => void;
   refreshSchema: () => Promise<void>;
+  /** 强制重跑环境自检（忽略主进程侧的缓存） */
+  runPrecheckNow: () => Promise<void>;
   start: () => Promise<void>;
   stop: () => Promise<void>;
   openConfig: () => Promise<void>;
@@ -124,6 +129,7 @@ export function useLauncher(): LauncherController {
   const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
   const [profilesDir, setProfilesDir] = useState("");
   const [settings, setSettings] = useState<AppSettingsPayload | null>(null);
+  const [precheck, setPrecheck] = useState<PrecheckReport | null>(null);
 
   /**
    * 用一次初始化载荷整体替换本地状态（启动、打开配置、导入 v1.9 后都走它）。
@@ -199,6 +205,10 @@ export function useLauncher(): LauncherController {
         await refreshProfiles();
         if (disposed) return;
         setSettings(await api.getSettings());
+        if (disposed) return;
+
+        // 环境自检：开机就跑一遍，这样「自检」页与标签页角标一开始就有内容
+        setPrecheck(await api.precheck(false));
       } catch (err) {
         if (!disposed) setError(message(err));
       } finally {
@@ -421,6 +431,16 @@ export function useLauncher(): LauncherController {
     [api, config, run, update],
   );
 
+  /** 强制重跑环境自检（主进程侧有缓存，force 才会真的重新采集） */
+  const runPrecheckNow = useCallback(
+    () =>
+      run("precheck", async () => {
+        if (api === null) return;
+        setPrecheck(await api.precheck(true));
+      }),
+    [api, run],
+  );
+
   /** 清空界面上的日志（只影响展示，主进程的诊断缓冲不动） */
   const clearLogs = useCallback(() => setLogs([]), []);
   /** 关掉顶部的错误横幅 */
@@ -525,8 +545,10 @@ export function useLauncher(): LauncherController {
     profiles,
     profilesDir,
     settings,
+    precheck,
     update,
     refreshSchema,
+    runPrecheckNow,
     start,
     stop,
     openConfig,

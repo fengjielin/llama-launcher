@@ -14,6 +14,8 @@ import { createCapabilities } from "../core/helpProbe.ts";
 import { prepareLaunch, probeServer } from "../core/launcher.ts";
 import { LlamaServer } from "../core/llamaProcess.ts";
 import { MetricsSampler } from "../core/metrics.ts";
+import { precheckWarnings, runPrecheck } from "../core/precheck.ts";
+import type { PrecheckReport } from "../core/precheck.ts";
 import {
   deleteProfile as deleteProfileFile,
   listProfiles as listProfileFiles,
@@ -82,6 +84,9 @@ export class LauncherSession {
   private server = new LlamaServer();
   /** 指标采样器：懒创建（没人看监控页时不该起定时器），但对象本身很轻 */
   private sampler: MetricsSampler | null = null;
+  /** 上一次自检结果与它对应的缓存键（配置没变就不必反复起 nvidia-smi） */
+  private lastPrecheck: PrecheckReport | null = null;
+  private precheckKey = "";
   private events: SessionEvents;
 
   /**
@@ -347,6 +352,18 @@ export class LauncherSession {
     }
     this.lastPreview = preview;
 
+    // 环境自检：把「这份构建与这台机器匹配不匹配」的结论一并带进告警。
+    // 只提示不拦截 —— 自检误判的代价（把用户挡住）比漏判（多一条警告）大得多。
+    try {
+      const report = await this.precheck();
+      const lines = precheckWarnings(report);
+      if (lines.length > 0) {
+        preview = { ...preview, warnings: [...preview.warnings, ...lines] };
+      }
+    } catch {
+      // 自检本身失败不该影响启动
+    }
+
     this.logBuffer = [];
     this.logSeq = 0;
 
@@ -385,6 +402,8 @@ export class LauncherSession {
    */
   async stop(): Promise<{ ok: boolean }> {
     await this.server.stop();
+    // 端口空出来了，自检里的「端口空闲」结论需要重算
+    this.invalidatePrecheck();
     return { ok: true };
   }
 
@@ -455,6 +474,83 @@ export class LauncherSession {
    */
   recentLogs(): LogPush[] {
     return [...this.logBuffer];
+  }
+
+  /**
+   * 跑一遍环境自检（驱动/CUDA 运行时/模型/端口），结果按配置缓存。
+   *
+   * 缓存键包含 exe、模型路径、端口与 presets 路径 —— 这些一变就重新自检；
+   * 另外服务启停时也会作废（端口占用状态会变）。
+   *
+   * @param force 忽略缓存强制重跑（界面上的「重新自检」按钮）
+   * @returns 自检报告；失败时返回一份"只有一条 error"的报告，而不是抛异常
+   */
+  async precheck(force = false): Promise<PrecheckReport> {
+    const exe = this.resolveExe(this.config);
+    const key = this.precheckKeyFor(exe);
+    if (!force && this.lastPrecheck !== null && this.precheckKey === key) return this.lastPrecheck;
+
+    if (exe === null) {
+      const report: PrecheckReport = {
+        at: Date.now(),
+        verdict: "error",
+        items: [
+          {
+            id: "exe",
+            level: "error",
+            title: "找不到 llama-server.exe",
+            detail: "无法确定要检查哪份构建。",
+            suggestion: "在界面里指定 llama.cpp 目录，或设置环境变量 LLAMA_DIR / LLAMA_SERVER。",
+          },
+        ],
+        facts: {
+          exe: "",
+          exeExists: false,
+          coreDllMissing: [],
+          backends: [],
+          cudaRuntimeDlls: [],
+          cudaRequiredMajor: null,
+          needsDriver: false,
+          missingRuntimeDlls: [],
+          driverVersion: null,
+          driverMaxCuda: null,
+          gpuName: null,
+          vramTotalMiB: null,
+          modelPath: null,
+          modelSizeMiB: null,
+          modelMagicOk: null,
+          portFree: null,
+          presetPathNonAscii: false,
+        },
+      };
+      this.lastPrecheck = report;
+      this.precheckKey = key;
+      return report;
+    }
+
+    const report = await runPrecheck({ config: this.config, exe });
+    this.lastPrecheck = report;
+    this.precheckKey = key;
+    return report;
+  }
+
+  /** 自检缓存键：这些字段决定了自检结论，任一变化就要重跑 */
+  private precheckKeyFor(exe: string | null): string {
+    return [
+      exe ?? "",
+      String(this.config.mode ?? "single"),
+      String(this.config.main_model ?? ""),
+      String(this.config.models_dir ?? ""),
+      String(this.config.preload_model ?? ""),
+      String(this.config.models_preset ?? ""),
+      String(this.config.port ?? ""),
+    ].join("|");
+  }
+
+  /** 作废自检缓存（服务启停后端口占用状态会变） */
+  private invalidatePrecheck(): void {
+    this.lastPrecheck = null;
+    this.precheckKey = "";
   }
 
   /**

@@ -25,6 +25,7 @@ const api: LlamaApi = {
   migrateConfig: () => ipcRenderer.invoke(IPC.configMigrate),
   pickPath: (request: PickPathRequest) => ipcRenderer.invoke(IPC.pickPath, request),
   detect: () => ipcRenderer.invoke(IPC.detect),
+  precheck: (force?: boolean) => ipcRenderer.invoke(IPC.precheck, force === true),
   preview: (config: LauncherConfig) => ipcRenderer.invoke(IPC.preview, config),
   start: (config: LauncherConfig) => ipcRenderer.invoke(IPC.start, config),
   stop: () => ipcRenderer.invoke(IPC.stop),

@@ -3,8 +3,8 @@
  * 业务逻辑全在 LauncherSession（不 import electron，可单测）。
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import type {
@@ -53,15 +53,19 @@ const START_HIDDEN = process.argv.includes("--hidden");
 /**
  * 默认配置文件的路径。
  *
- * 开发时放在项目根目录（和应用代码在一起，改起来一目了然）；
- * 打包后必须放用户数据目录，因为安装目录是只读的，写配置文件会失败。
+ * 三种情况，按"用户最可能把文件放哪儿"排：
+ * 1. **开发时**：项目根目录（和应用代码在一起，改起来一目了然）
+ * 2. **打包后的便携版**：exe 同目录 —— 便携版的惯例就是"整个文件夹拷走就能用"，
+ *    配置跟着 exe 走才不会一换机器就丢
+ * 3. **打包后的安装版**：用户数据目录（安装目录是只读的，写不进去）
  *
  * @returns 配置文件的绝对路径
  */
 function defaultConfigPath(): string {
-  return app.isPackaged
-    ? join(app.getPath("userData"), "llama-launcher.json")
-    : join(app.getAppPath(), "llama-launcher.json");
+  if (!app.isPackaged) return join(app.getAppPath(), "llama-launcher.json");
+  const portable = join(dirname(app.getPath("exe")), "llama-launcher.json");
+  if (existsSync(portable)) return portable;
+  return join(app.getPath("userData"), "llama-launcher.json");
 }
 
 /**
@@ -367,6 +371,7 @@ function registerIpc(): void {
 
   ipcMain.handle(IPC.bootstrap, () => s().bootstrap());
   ipcMain.handle(IPC.detect, () => s().detect());
+  ipcMain.handle(IPC.precheck, (_e, force: boolean) => s().precheck(force === true));
   ipcMain.handle(IPC.preview, (_e, config: LauncherConfig) => s().preview(config));
   ipcMain.handle(IPC.start, (_e, config: LauncherConfig) => s().start(config));
   ipcMain.handle(IPC.stop, () => s().stop());

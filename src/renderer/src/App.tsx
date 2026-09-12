@@ -5,16 +5,18 @@ import { LogPane } from "./components/LogPane.tsx";
 import { MetricsPanel } from "./components/MetricsPanel.tsx";
 import { ModelPanel } from "./components/ModelPanel.tsx";
 import { ParamsForm, MODEL_PANEL_KEYS } from "./components/ParamsForm.tsx";
+import { PrecheckPanel } from "./components/PrecheckPanel.tsx";
 import { StatusBar } from "./components/StatusBar.tsx";
 import { TopBar } from "./components/TopBar.tsx";
 import { Badge, Button } from "./components/ui.tsx";
 import { useLauncher } from "./hooks/useLauncher.ts";
 
-type Tab = "params" | "decision" | "metrics" | "logs";
+type Tab = "params" | "decision" | "precheck" | "metrics" | "logs";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "params", label: "参数" },
   { id: "decision", label: "决策表" },
+  { id: "precheck", label: "自检" },
   { id: "metrics", label: "监控" },
   { id: "logs", label: "日志" },
 ];
@@ -59,9 +61,15 @@ pnpm build && pnpm start   # 构建后运行</pre>
   const tabCount = (id: Tab): number => {
     if (id === "params") return paramCount;
     if (id === "decision") return steps;
+    if (id === "precheck") {
+      // 自检页只统计"要看一眼"的项（error + warn），全是绿色时角标为 0
+      return (launcher.precheck?.items ?? []).filter((item) => item.level === "error" || item.level === "warn").length;
+    }
     if (id === "metrics") return launcher.metrics?.series.at.length ?? 0;
     return launcher.logs.length;
   };
+  /** 自检发现"会导致启动失败"的项时，在命令行栏上给一条醒目的提示 */
+  const precheckErrors = (launcher.precheck?.items ?? []).filter((item) => item.level === "error");
 
   return (
     <div className="flex h-full flex-col">
@@ -82,6 +90,18 @@ pnpm build && pnpm start   # 构建后运行</pre>
 
         <main className="flex min-w-0 flex-1 flex-col">
           <CommandBar launcher={launcher} />
+
+          {precheckErrors.length > 0 ? (
+            <div className="flex shrink-0 items-start gap-2 border-b border-rose-900/50 bg-rose-950/30 px-4 py-1.5">
+              <Badge tone="rose">环境自检不通过</Badge>
+              <span className="min-w-0 flex-1 text-xs text-rose-200">
+                {precheckErrors.map((item) => item.title).join("；")}
+              </span>
+              <Button variant="ghost" onClick={() => setTab("precheck")}>
+                查看自检
+              </Button>
+            </div>
+          ) : null}
 
           <nav className="flex shrink-0 items-center gap-1 border-b border-[#1e2530] px-4">
             {TABS.map((item) => (
@@ -104,6 +124,7 @@ pnpm build && pnpm start   # 构建后运行</pre>
           <div className="min-h-0 flex-1 overflow-hidden">
             {tab === "params" ? <ParamsForm launcher={launcher} /> : null}
             {tab === "decision" ? <DecisionTable launcher={launcher} /> : null}
+            {tab === "precheck" ? <PrecheckPanel launcher={launcher} /> : null}
             {/* 监控页自己管采样的开关（挂载开、卸载关），所以只在激活时渲染 */}
             {tab === "metrics" ? <MetricsPanel launcher={launcher} /> : null}
             {tab === "logs" ? <LogPane launcher={launcher} /> : null}

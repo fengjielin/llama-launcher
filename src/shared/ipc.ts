@@ -12,6 +12,7 @@ import type { BuildStep, LauncherConfig } from "../core/types.ts";
 import type { ParamGroup, ValueKind } from "../core/types.ts";
 import type { LogEventKind, LogMetrics } from "../core/logLines.ts";
 import type { MetricsSample, MetricsSeries } from "../core/metrics.ts";
+import type { PrecheckReport } from "../core/precheck.ts";
 import type { ProfileInfo } from "../core/profiles.ts";
 
 export const IPC = {
@@ -29,6 +30,8 @@ export const IPC = {
   pickPath: "dialog:pickPath",
   /** 现场跑 --version/--help，重算能力视图 */
   detect: "llama:detect",
+  /** 跑一遍环境自检（驱动/CUDA 运行时/模型/端口） */
+  precheck: "precheck:run",
   /** 只拼命令行并给出决策表（不启动进程） */
   preview: "llama:preview",
   start: "llama:start",
@@ -295,6 +298,8 @@ export interface LlamaApi {
   migrateConfig(): Promise<ConfigFileResult>;
   pickPath(request: PickPathRequest): Promise<PickPathResult>;
   detect(): Promise<DetectPayload | ErrorPayload>;
+  /** 环境自检：驱动是否配得上这份构建、运行时 DLL 齐不齐、模型能不能装下等 */
+  precheck(force?: boolean): Promise<PrecheckReport>;
   preview(config: LauncherConfig): Promise<PreviewPayload | ErrorPayload>;
   start(config: LauncherConfig): Promise<StartPayload | ErrorPayload>;
   stop(): Promise<{ ok: boolean }>;

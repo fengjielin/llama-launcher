@@ -136,10 +136,10 @@ llama-launcher/
 pnpm test          # 等价于 node src/test/run-tests.ts
 ```
 
-141 项测试覆盖：`--help` 解析（真实 fixture）、能力回退、preset 并集/单模型/非 ASCII/BOM、命令行拼装黄金用例、
+148 项测试覆盖：`--help` 解析（真实 fixture）、能力回退、preset 并集/单模型/非 ASCII/BOM、命令行拼装黄金用例、
 预加载覆盖规则、旧版本各回退分支、参数改名、配置迁移、上下文单位识别、行缓冲跨块、日志分类、失败诊断、
 `/health` 的 200/503 语义、端口顺延、GPU 采集解析（真实 `nvidia-smi` 输出）、CPU 差分、指标环形缓冲与序列化、
-档案 CRUD 与文件名安全化、PE 导入表解析（真实 `ggml-cuda.dll`）、环境自检的各条判定分支。
+档案 CRUD 与文件名安全化、PE 导入表解析（真实 `ggml-cuda.dll`）、环境自检各判定分支、数据落点的三种情形。
 
 > 为什么不用 `node --test`：那个运行器会为每个测试文件 spawn 子进程并把 stdio 接管道，在受限沙箱里直接
 > `EPERM`。`run-tests.ts` 改成在同一进程里 import 全部测试文件，`node:test` 照样自动执行并设置退出码 ——
@@ -322,9 +322,25 @@ pnpm package:portable   # → 单文件便携版（当前受阻，见下）
 它们是几十 GB 的东西，而且你本来就会换构建版本，打进去反而没法换。启动器启动时按配置去找
 `llama-server.exe`。
 
-便携版的配置查找顺序（`src/main/index.ts` 的 `defaultConfigPath`）：
-开发时用项目根目录 → **打包后优先用 exe 同目录的 `llama-launcher.json`**（便携版惯例：整个文件夹拷走就能用）
-→ 都没有才用 `%APPDATA%\llama-launcher\`。
+### 数据放哪儿：便携优先
+
+策略在 `src/main/paths.ts`（有单测覆盖三种情形）：
+
+| 情形 | 配置 | Chromium 运行时数据 |
+| --- | --- | --- |
+| 开发模式（未打包） | 项目根目录 | Electron 默认 userData（不动它） |
+| **打包后，exe 目录可写** | **`<exeDir>/llama-launcher.json`** | **`<exeDir>/data/`** |
+| 打包后，exe 目录只读（如装进 `Program Files`） | `%APPDATA%\llama-launcher\` | 同左 |
+
+也就是说：**便携模式下整个文件夹拷走就等于把配置与数据一起带走，`%APPDATA%` 里不留任何东西**
+（实测：清空 `%APPDATA%\llama-launcher` 后跑一次打包产物，那个目录不会被再创建，而 exe 旁边
+出现了 `llama-launcher.json` 与 `data/`）。首次运行时如果 exe 旁边还没有配置，会**自动生成一份默认配置**
+（含自动探测到的 `llama.cpp` 目录），并留一条「已生成默认配置：<路径>」的提示。
+界面左栏「启动器设置」里也把这三条路径直接显示出来。
+
+> 踩过的坑：`app.getPath("userData")` **这个调用本身会把目录建出来**。
+> 早先的写法在"决定落点"之前就调它取默认路径，结果便携模式下也在 `%APPDATA%` 里留了个空目录。
+> 现在 `chooseDataLayout` 的 `defaultUserDataDir` 是**惰性求值**的（传函数），只在真要回退时才去问它。
 
 **已实测**：打包出的 `llama-launcher.exe` 能独立运行，自己探测到 `E:\Code\llama\llama.cpp`，
 自检面板正常显示「构建需要 CUDA 12 / 驱动支持 12.7 / RTX 4060 Ti」。

@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { test } from "node:test";
 import {
   buildNvidiaSmiQueryArgs,
-  formatMiB,
   GPU_QUERY_FIELDS,
   parseNvidiaSmiCsv,
   parseOptionalNumber,
@@ -115,14 +114,6 @@ test("parseOptionalNumber 的边界", () => {
   assert.equal(parseOptionalNumber(""), null);
   assert.equal(parseOptionalNumber("   "), null);
   assert.equal(parseOptionalNumber("abc"), null);
-});
-
-test("formatMiB 按量级切换单位", () => {
-  assert.equal(formatMiB(15103), "14.7 GB");
-  assert.equal(formatMiB(512), "512 MiB");
-  assert.equal(formatMiB(1024), "1.0 GB");
-  assert.equal(formatMiB(0), "0 MiB");
-  assert.equal(formatMiB(null), "N/A");
 });
 
 test("vramUsageRatio：算比例、防除零、夹到 0~1", () => {

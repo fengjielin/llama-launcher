@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { DEFAULT_CONFIG } from "../core/config.ts";
 import {
   buildPrecheckItems,
   compareVersions,
@@ -12,18 +11,13 @@ import {
   modelFileName,
   parseCudaRuntimeImports,
   parseDriverInfo,
-  pickModelPath,
   precheckWarnings,
   resolveDll,
-  runPrecheck,
 } from "../core/precheck.ts";
 import type { PrecheckFacts } from "../core/precheck.ts";
-import type { LauncherConfig } from "../core/types.ts";
+import { withTempDir } from "./helpers.ts";
 
 const fixturesDir = join(import.meta.dirname, "..", "..", "fixtures");
-const llamaDir = join(import.meta.dirname, "..", "..", "..", "llama.cpp");
-const realExe = join(llamaDir, "llama-server.exe");
-const realModel = join(import.meta.dirname, "..", "..", "..", "models", "qwen2.5-7b-instruct-q4_k_m.gguf");
 
 /** 造一份"一切正常"的事实，便于逐项改动来测各个分支 */
 function facts(over: Partial<PrecheckFacts> = {}): PrecheckFacts {
@@ -120,18 +114,33 @@ test("compareVersions / majorOf", () => {
   assert.equal(majorOf("abc"), null);
 });
 
-test("isGgufFile：真实模型是 GGUF；文本文件不是；不存在返回 null", { skip: existsSync(realModel) ? false : "本机没有该模型，跳过" }, () => {
-  assert.equal(isGgufFile(realModel), true);
-  assert.equal(isGgufFile(join(fixturesDir, "help-b10488.txt")), false);
-  assert.equal(isGgufFile(join(fixturesDir, "没有这个文件.gguf")), null);
+test("isGgufFile：只认大端 GGUF 头（临时文件，不依赖本机模型）", () => {
+  withTempDir("llama-gguf-", (dir) => {
+    const gguf = join(dir, "m.gguf");
+    writeFileSync(gguf, Buffer.from("GGUF"));
+    assert.equal(isGgufFile(gguf), true);
+
+    const text = join(dir, "not-model.gguf");
+    writeFileSync(text, "不是模型");
+    assert.equal(isGgufFile(text), false);
+
+    const short = join(dir, "short.gguf");
+    writeFileSync(short, "GG");
+    assert.equal(isGgufFile(short), false, "读不满 4 字节按不是 GGUF 处理");
+
+    assert.equal(isGgufFile(join(dir, "没有这个文件.gguf")), null);
+  });
 });
 
-test("listBackends：从真实目录里认出 cpu 与 cuda", { skip: existsSync(llamaDir) ? false : "本机没有 llama.cpp 目录，跳过" }, () => {
-  const backends = listBackends(llamaDir);
-  assert.ok(backends.includes("cpu"), `实际：${backends.join(", ")}`);
-  assert.ok(backends.includes("cuda"));
-  // ggml-base.dll 不是后端，不该被算进去
-  assert.equal(backends.includes("base"), false);
+test("listBackends：按 ggml-*.dll 归类，ggml-base 不算后端", () => {
+  withTempDir("llama-backends-", (dir) => {
+    for (const name of ["ggml-cpu.dll", "ggml-cpu-haswell.dll", "ggml-cuda.dll", "ggml-base.dll", "other.dll"]) {
+      writeFileSync(join(dir, name), "");
+    }
+    const backends = listBackends(dir);
+    assert.deepEqual(backends.sort(), ["cpu", "cuda"]);
+    assert.equal(backends.includes("base"), false, "ggml-base 是公共库，不是后端");
+  });
 });
 
 test("listBackends：目录不存在时返回空数组", () => {
@@ -144,14 +153,7 @@ test("resolveDll：按目录顺序查找", () => {
   assert.equal(resolveDll("并不存在.dll", [fixturesDir]), null);
 });
 
-test("pickModelPath：router 取预加载模型，single 取主模型", () => {
-  assert.equal(
-    pickModelPath({ ...DEFAULT_CONFIG, mode: "router", models_dir: "E:\\m", preload_model: "abc" }),
-    join("E:\\m", "abc.gguf"),
-  );
-  assert.equal(pickModelPath({ ...DEFAULT_CONFIG, mode: "router", models_dir: "E:\\m" }), null);
-  assert.equal(pickModelPath({ ...DEFAULT_CONFIG, mode: "single", main_model: "E:\\x.gguf" }), "E:\\x.gguf");
-  assert.equal(pickModelPath({ ...DEFAULT_CONFIG, mode: "single" }), null);
+test("modelFileName：取文件名", () => {
   assert.equal(modelFileName("E:\\m\\x.gguf"), "x.gguf");
 });
 
@@ -267,35 +269,3 @@ test("precheckWarnings 只挑 error/warn 并带上建议", () => {
   assert.ok(warnings.every((line) => line.startsWith("[环境自检]")));
   assert.ok(warnings.some((line) => line.includes("端口")));
 });
-
-// ---------------------------------------------------------------------------
-// 整体跑一遍（用本机真实环境）
-// ---------------------------------------------------------------------------
-
-test(
-  "runPrecheck：在本机真实环境跑通，且能读出「构建需要 CUDA 12 / 驱动支持 12.7」",
-  { skip: existsSync(realExe) ? false : "本机没有 llama.cpp，跳过" },
-  async () => {
-    const config: LauncherConfig = {
-      ...DEFAULT_CONFIG,
-      llama_dir: llamaDir,
-      mode: "single",
-      main_model: existsSync(realModel) ? realModel : "",
-    };
-
-    const report = await runPrecheck({ config, exe: realExe });
-
-    assert.equal(report.facts.exeExists, true);
-    assert.equal(report.facts.cudaRequiredMajor, 12, "b10488 是 CUDA 12.4 构建");
-    assert.match(report.facts.driverMaxCuda ?? "", /^\d+\.\d+$/);
-    assert.ok(report.facts.backends.includes("cuda"));
-    assert.ok(report.items.length >= 5);
-    // 本机环境是匹配的，不该出现 error
-    const errors = report.items.filter((item) => item.level === "error");
-    assert.deepEqual(
-      errors.map((item) => `${item.id}: ${item.title}`),
-      [],
-    );
-    assert.ok(["ok", "info", "warn"].includes(report.verdict));
-  },
-);

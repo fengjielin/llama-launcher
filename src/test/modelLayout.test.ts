@@ -1,21 +1,10 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { test } from "node:test";
 import { discoverModelLayout } from "../core/config.ts";
-
-/**
- * 造一个假的 llama.cpp 目录（只要有一个 llama-server.exe，探测就认）。
- *
- * @param dir 目标目录
- * @returns 该目录的绝对路径
- */
-function makeLlamaDir(dir: string): string {
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "llama-server.exe"), "", "utf8");
-  return resolve(dir);
-}
+import { makeLlamaDir } from "./helpers.ts";
 
 test("模型布局探测：同级有 models 与 presets.ini → 默认仍 single + 预加载", () => {
   const root = mkdtempSync(join(tmpdir(), "llama-layout-full-"));

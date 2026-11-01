@@ -333,6 +333,12 @@ test("并发槽位 / 线程：-1、0 视为自动，不传", () => {
   assert.deepEqual(pair(build(base({ parallel: 4 })).argv, "-np"), ["-np", "4"]);
 });
 
+test("MoE 分层：cpu_moe_layers 直传 -ncmoe（当前真实配置在用的字段）", () => {
+  const r = build(base({ cpu_moe_layers: 4 }));
+  assert.deepEqual(pair(r.argv, "-ncmoe"), ["-ncmoe", "4"]);
+  assert.equal(r.steps.find((s) => s.key === "cpu_moe_layers")?.reason, "cli");
+});
+
 test("开关类参数：默认是「开」的项，关掉时必须显式传 no/off", () => {
   // llama.cpp 里 --jinja 默认启用、-fa 默认 auto（通常等于开），
   // 所以"不传"等于"没关" —— 这是把三态参数做成开关后最容易犯的错

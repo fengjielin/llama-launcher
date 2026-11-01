@@ -3,9 +3,11 @@ import { test } from "node:test";
 import { bytesToMiB, formatMiB, summarizeDetect } from "../core/format.ts";
 
 test("formatMiB：MiB / GB 分界与不可用字段", () => {
+  assert.equal(formatMiB(15103), "14.7 GB");
   assert.equal(formatMiB(512), "512 MiB");
   assert.equal(formatMiB(1024), "1.0 GB");
   assert.equal(formatMiB(16380), "16.0 GB");
+  assert.equal(formatMiB(0), "0 MiB");
   assert.equal(formatMiB(null), "N/A");
 });
 

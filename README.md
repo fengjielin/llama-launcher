@@ -199,17 +199,22 @@ llama-launcher/
 ## 测试
 
 ```powershell
-pnpm test          # 等价于 node src/test/run-tests.ts
+pnpm test          # 默认套件：不读本机安装，任何机器都能跑（200 条）
+pnpm test:env      # 真机套件：读本机 llama.cpp / 模型，缺文件自动 skip（5 条）
 ```
 
-192 项测试覆盖：`--help` 解析（真实 fixture）、能力回退、preset 并集/单模型/非 ASCII/BOM、命令行拼装黄金用例、
+200 项默认测试覆盖：`--help` 解析（真实 fixture）、能力回退、preset 并集/单模型/非 ASCII/BOM、命令行拼装黄金用例、
 预加载覆盖规则、旧版本各回退分支、参数改名、配置迁移、上下文单位识别、行缓冲跨块、日志分类、失败诊断、
 `/health` 的 200/503 语义、端口顺延、GPU 采集解析（真实 `nvidia-smi` 输出）、CPU 差分、指标环形缓冲与序列化、
-档案 CRUD 与文件名安全化、PE 导入表解析（真实 `ggml-cuda.dll`）、环境自检各判定分支、数据落点三种情形、
+档案 CRUD 与文件名安全化、PE 导入表的坏输入分支（真实 `ggml-cuda.dll` 在 `test:env`）、环境自检各判定分支、数据落点三种情形、
 llama.cpp 目录的向上回溯探测（含层数上限与环境变量优先）、模型布局探测（models 目录 / presets.ini / 预加载）、
 关窗决策表（服务在跑 / 没跑 / 已开缩托盘 / 正在退出）、便携版应用目录的解析、
 单模型模式主模型的推算（preload_model + models_dir 兜底，含存在性检查）、
-重新探测结果的摘要文案（成功/失败两种口径）、预加载模型的 -n 必须直传且取该模型预设里的值、导入时按 ctx-size 派生 n-predict、模型目录扫描（分片合并/分片不全检测）。
+重新探测结果的摘要文案（成功/失败两种口径）、预加载模型的 -n 必须直传且取该模型预设里的值、导入时按 ctx-size 派生 n-predict、模型目录扫描（分片合并/分片不全检测 / mmproj 与 draft 归类）、
+GGUF 头与后端归类的临时文件用例（不再依赖本机模型）、MoE 分层 `-ncmoe` 直传。
+
+真机套件（`test:env`）只断言结构（导入表里有 CUDA 运行时、自检不产生 error），
+不写死 build 号 / CUDA 主版本 / 驱动版本 —— 那些是环境指纹，换机器就会变。
 
 > 为什么不用 `node --test`：那个运行器会为每个测试文件 spawn 子进程并把 stdio 接管道，在受限沙箱里直接
 > `EPERM`。`run-tests.ts` 改成在同一进程里 import 全部测试文件，`node:test` 照样自动执行并设置退出码 ——

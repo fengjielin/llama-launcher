@@ -1,21 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { test } from "node:test";
 import { discoverLlamaDir } from "../core/config.ts";
-
-/**
- * 造一个假的 llama.cpp 目录（只要有一个 llama-server.exe 文件，探测就认）。
- *
- * @param dir 目标目录
- * @returns 该目录的绝对路径
- */
-function makeLlamaDir(dir: string): string {
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "llama-server.exe"), "", "utf8");
-  return resolve(dir);
-}
+import { makeLlamaDir } from "./helpers.ts";
 
 test("向上回溯：从深层目录能找到祖先下的 llama.cpp（打包版的实际布局）", () => {
   const root = mkdtempSync(join(tmpdir(), "llama-discover-"));

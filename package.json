@@ -21,6 +21,7 @@
     "package:portable": "electron-vite build && node scripts/package.mjs --win portable",
     "package:check": "node scripts/package.mjs --check",
     "test": "node src/test/run-tests.ts",
+    "test:env": "node src/test/run-env-tests.ts",
     "typecheck": "tsc --noEmit",
     "probe": "node src/cli.ts probe",
     "args": "node src/cli.ts args",

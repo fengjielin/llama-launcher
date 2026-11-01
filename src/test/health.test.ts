@@ -31,7 +31,7 @@ test("probeTcp：监听中为 true，关掉后为 false", async () => {
   assert.equal(await probeTcp("127.0.0.1", port, 500), false);
 });
 
-test("/health：200 = ready，503 = loading（router 模式模型未加载，不是故障）", async () => {
+test("/health：200 = ready，503 = loading（服务在、模型还没加载完，不是故障）", async () => {
   let status = 200;
   const server = createServer((_req, res) => {
     res.statusCode = status;

@@ -9,7 +9,6 @@ dist-fallback-*/
 .electron-dist/
 
 # 本地配置与日志：含本机路径，不入库
-llama-launcher.json
 *.log
 *.local.json
 

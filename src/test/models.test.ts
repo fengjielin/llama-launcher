@@ -97,6 +97,96 @@ test("扫模型目录：空目录返回空列表且 exists 为真", () => {
     assert.equal(r.exists, true);
     assert.deepEqual(r.models, []);
     assert.equal(r.error, undefined);
+    assert.deepEqual(r.hidden, { mmproj: 0, draft: 0 });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("扫模型目录：剔除视觉投影与草稿模型，并记账（下拉框只列能当 -m 的）", () => {
+  const dir = mkdtempSync(join(tmpdir(), "llama-models-filter-"));
+  try {
+    makeFile(join(dir, "main-model.gguf"), 1);
+    makeFile(join(dir, "mmproj-main-model-F16.gguf"), 1);
+    makeFile(join(dir, "draft-Qwen3-0.6B.gguf"), 1);
+    makeFile(join(dir, "Qwen3-8B-draft.gguf"), 1);
+    // 附属文件也可能分片：合并后按基名一起判掉
+    makeFile(join(dir, "mmproj-side-00001-of-00002.gguf"), 1);
+    makeFile(join(dir, "mmproj-side-00002-of-00002.gguf"), 1);
+
+    const r = scanModelDir(dir);
+    assert.deepEqual(r.models.map((m) => m.name), ["main-model"], "只留下主模型");
+    assert.deepEqual(r.hidden, { mmproj: 2, draft: 2 }, "剔除数量要如实记账，界面据此说明");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("扫模型目录：名字里只是碰巧含 draft 的普通模型不误杀", () => {
+  const dir = mkdtempSync(join(tmpdir(), "llama-models-draftish-"));
+  try {
+    makeFile(join(dir, "Qwen3-Drafting.gguf"), 1);
+    makeFile(join(dir, "redraft-8b.gguf"), 1);
+
+    const r = scanModelDir(dir);
+    assert.deepEqual(
+      r.models.map((m) => m.name).sort(),
+      ["Qwen3-Drafting", "redraft-8b"],
+      "只认独立出现的 draft 词，不做子串匹配",
+    );
+    assert.deepEqual(r.hidden, { mmproj: 0, draft: 0 });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("扫模型目录：目录里只有附属文件时 models 为空，但 hidden 有值（界面能解释空下拉框）", () => {
+  const dir = mkdtempSync(join(tmpdir(), "llama-models-only-aux-"));
+  try {
+    makeFile(join(dir, "mmproj-model-F16.gguf"), 1);
+
+    const r = scanModelDir(dir);
+    assert.equal(r.exists, true);
+    assert.deepEqual(r.models, []);
+    assert.deepEqual(r.hidden, { mmproj: 1, draft: 0 });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("扫模型目录：约定子目录 mmproj/ 与 draft/ 里的文件进 aux，不混进主模型（名字随便起）", () => {
+  const dir = mkdtempSync(join(tmpdir(), "llama-models-auxdirs-"));
+  try {
+    makeFile(join(dir, "main.gguf"), 1);
+    mkdirSync(join(dir, "mmproj"));
+    mkdirSync(join(dir, "draft"));
+    // 故意不用 mmproj / draft 命名：目录约定本身就该认得出来
+    makeFile(join(dir, "mmproj", "随便起名-F16.gguf"), 1);
+    makeFile(join(dir, "draft", "Qwen3-0.6B-Q8_0.gguf"), 1);
+    makeFile(join(dir, "draft", "小模型-00001-of-00002.gguf"), 1);
+    makeFile(join(dir, "draft", "小模型-00002-of-00002.gguf"), 1);
+
+    const r = scanModelDir(dir);
+    assert.deepEqual(r.models.map((m) => m.name), ["main"], "主模型列表只留顶层主模型");
+    assert.deepEqual(r.aux.mmproj.map((m) => m.name), ["随便起名-F16"]);
+    const draftNames = r.aux.draft.map((m) => m.name);
+    assert.equal(draftNames.length, 2, "子目录里同样按分片合并成一条");
+    assert.ok(draftNames.includes("Qwen3-0.6B-Q8_0"));
+    assert.ok(draftNames.includes("小模型"));
+    assert.deepEqual(r.hidden, { mmproj: 0, draft: 0 }, "进候选的不算「隐藏」，别重复记账");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("扫模型目录：没有约定子目录时 aux 是空数组，不影响主列表", () => {
+  const dir = mkdtempSync(join(tmpdir(), "llama-models-noaux-"));
+  try {
+    makeFile(join(dir, "only.gguf"), 1);
+
+    const r = scanModelDir(dir);
+    assert.deepEqual(r.aux, { mmproj: [], draft: [] });
+    assert.deepEqual(r.models.map((m) => m.name), ["only"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

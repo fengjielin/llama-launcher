@@ -5,6 +5,7 @@ import type { ProfileInfo } from "../../../core/profiles.ts";
 import type { PrecheckReport } from "../../../core/precheck.ts";
 import { isErrorPayload } from "../../../shared/ipc.ts";
 import { summarizeDetect } from "../../../core/format.ts";
+import { configPatchFromPreset, modelNameFromPath } from "../../../core/presetApply.ts";
 import type {
   AppSettings,
   AppSettingsPayload,
@@ -70,6 +71,13 @@ export interface LauncherController {
   /** 环境自检报告（驱动/CUDA 运行时/模型/端口） */
   precheck: PrecheckReport | null;
   update: (patch: Partial<LauncherConfig>) => void;
+  /**
+   * 选中单模型模式的主模型，并**按该模型的预设填充参数**。
+   *
+   * 预设是"按模型的参数模板"：router 下由 `--models-preset` 交给服务器按模型接管，
+   * 而 single 下没有这个参数，所以选中时要把模板填进配置，保证配置内容两边都有效。
+   */
+  selectMainModel: (modelPath: string) => void;
   /** 重新探测能力并刷新参数表；返回值供调用方汇总结果（例如「重新探测」按钮） */
   refreshSchema: () => Promise<DetectPayload | ErrorPayload | null>;
   /** 强制重跑环境自检（忽略主进程侧的缓存） */
@@ -416,6 +424,38 @@ export function useLauncher(): LauncherController {
   }, []);
 
   /**
+   * 选中一个模型时，把它的预设套到配置上。
+   *
+   * 为什么放在这里而不是渲染层：主模型既可能来自下拉框，也可能来自「浏览…」选文件，
+   * 两个入口都要走同一套填充规则，否则同一个模型会因入口不同而得到不同参数。
+   *
+   * @param modelPath 选中的 GGUF 路径（分片模型是第一个分片）
+   * @returns 可直接交给 `update` 的补丁：主模型路径 + 预设里的参数
+   */
+  const applyModelPreset = useCallback(
+    (modelPath: string): Partial<LauncherConfig> => {
+      if (config === null) return { main_model: modelPath };
+      const modelName = modelNameFromPath(modelPath);
+      const { patch, applied, unknown } = configPatchFromPreset(config.presets ?? {}, modelName);
+      if (applied.length > 0) {
+        flashMessage(`已按「${modelName}」的预设填入 ${applied.length} 项：${applied.join("、")}`);
+      } else if (unknown.length > 0) {
+        flashMessage(`「${modelName}」的预设里没有能识别的参数：${unknown.join("、")}`);
+      }
+      return { main_model: modelPath, ...patch };
+    },
+    [config, flashMessage],
+  );
+
+  /** 单模型下拉框选中模型：设置主模型 + 应用它的预设（两个入口共用 {@link applyModelPreset}） */
+  const selectMainModel = useCallback(
+    (modelPath: string) => {
+      update(applyModelPreset(modelPath));
+    },
+    [update, applyModelPreset],
+  );
+
+  /**
    * 启动服务。
    *
    * 结果同时喂给三处：`lastStart`（失败时要展示诊断结论）、`preview`（端口顺延后命令可能变了）、
@@ -546,9 +586,14 @@ export function useLauncher(): LauncherController {
           defaultPath: typeof current === "string" ? current : undefined,
         });
         if (result.canceled || result.path === null) return;
+        // 主模型走"预设填充"这条路：浏览选的模型与下拉框选的模型结果必须一致
+        if (key === "main_model") {
+          update(applyModelPreset(result.path));
+          return;
+        }
         update({ [key]: result.path });
       }),
-    [api, config, run, update],
+    [api, config, run, update, applyModelPreset],
   );
 
   /** 强制重跑环境自检（主进程侧有缓存，force 才会真的重新采集） */
@@ -673,6 +718,7 @@ export function useLauncher(): LauncherController {
     settings,
     precheck,
     update,
+    selectMainModel,
     refreshSchema,
     runPrecheckNow,
     start,

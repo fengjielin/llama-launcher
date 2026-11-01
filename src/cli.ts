@@ -399,7 +399,8 @@ async function cmdRun(flags: Flags): Promise<number> {
  * `init`：按当前机器的实际情况生成一份可直接用的配置。
  *
  * 探测规则全部来自 core 的 {@link discoverModelLayout}（与界面「首次运行自动生成配置」共用同一份实现）：
- * llama.cpp 目录 → 同级 `models` 目录 → `presets.ini`（据此定 mode）→ presets 的 `[defaults]`
+ * llama.cpp 目录 → 同级 `models` 目录 → `presets.ini`（只用于导入预设，**不再据此定 mode**：
+ * 生成的配置一律 `single`，要 router 需在配置里显式写）→ presets 的 `[defaults]`
  * 约定决定是否预加载。这样命令行生成的配置与首次运行生成的配置不会出现两套行为。
  *
  * @param flags 命令行开关：`--config` / `--llama-dir` / `--force`

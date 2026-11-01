@@ -160,8 +160,9 @@ test("关掉 Flash Attention 时 V cache 量化失效，只压 K", () => {
   assert.ok(warnings.some((w) => w.includes("Flash Attention")));
 });
 
-test("给了 models_dir 就推断成 router 模式，显式 mode 优先", () => {
-  assert.equal(normalizeConfig({ models_dir: "E:/m" }).config.mode, "router");
+test("默认 single：只给 models_dir 不再推断成 router，显式 mode 才作数", () => {
+  assert.equal(normalizeConfig({ models_dir: "E:/m" }).config.mode, "single", "有模型目录不等于要 router");
+  assert.equal(normalizeConfig({ mode: "router", models_dir: "E:/m" }).config.mode, "router");
   assert.equal(normalizeConfig({ mode: "single", models_dir: "E:/m" }).config.mode, "single");
   assert.equal(normalizeConfig({}).config.mode, "single");
 });

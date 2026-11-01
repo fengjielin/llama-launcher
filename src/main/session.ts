@@ -225,7 +225,7 @@ export class LauncherSession {
       if (layout.presetPath !== "") {
         const count = Object.keys(presets).length;
         this.configNotices.push(
-          `已自动探测到 presets.ini：${layout.presetPath}（运行模式已设为 router）` +
+          `已自动探测到 presets.ini：${layout.presetPath}` +
             (count > 0 ? `，其中 ${count} 个模型的预设已导入配置的 presets 字段` : ""),
         );
       }
@@ -404,6 +404,8 @@ export class LauncherSession {
         ...model,
         hasPreset: Object.prototype.hasOwnProperty.call(presets, model.name),
       })),
+      hidden: scan.hidden,
+      aux: scan.aux,
       ...(scan.error === undefined ? {} : { error: scan.error }),
     };
   }

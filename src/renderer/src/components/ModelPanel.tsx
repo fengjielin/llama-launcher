@@ -18,6 +18,8 @@ function PathRow({
   hint,
   suggestion,
   onUseSuggestion,
+  choices,
+  choicesPlaceholder,
   onPick,
   onChange,
 }: {
@@ -29,10 +31,17 @@ function PathRow({
   suggestion?: string;
   /** 点「填入」时调用；不传则即使有 suggestion 也不显示按钮 */
   onUseSuggestion?: (path: string) => void;
+  /** 候选列表（来自约定子目录 `mmproj/`、`draft/`）：非空就多渲染一个下拉，选中即写入本字段 */
+  choices?: { value: string; label: string }[];
+  /** 下拉里那个空选项的说法 */
+  choicesPlaceholder?: string;
   onPick: () => void;
   onChange: (next: string | null) => void;
 }) {
   const canFill = value === "" && suggestion !== undefined && suggestion !== "" && onUseSuggestion !== undefined;
+  /** 当前值是手选/浏览进来的、不在候选里：下拉得有个位置显示它，否则看起来像"没选" */
+  const currentMissing = value !== "" && choices !== undefined && !choices.some((c) => c.value === value);
+  const currentName = value.split(/[\\/]/).pop() ?? value;
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between gap-2">
@@ -41,7 +50,27 @@ function PathRow({
           浏览…
         </Button>
       </div>
-      <TextInput mono value={value} placeholder={placeholder} onChange={(next) => onChange(next === "" ? null : next)} />
+      {choices !== undefined && choices.length > 0 ? (
+        <Select
+          className="w-full"
+          value={currentMissing ? "__current__" : value}
+          options={[
+            { value: "", label: choicesPlaceholder ?? "（不指定）" },
+            ...(currentMissing ? [{ value: "__current__", label: `${currentName}（不在约定子目录里）` }] : []),
+            ...choices,
+          ]}
+          onChange={(next) => {
+            if (next !== "" && next !== "__current__") onChange(next);
+          }}
+        />
+      ) : null}
+      <TextInput
+        mono
+        className="w-full"
+        value={value}
+        placeholder={placeholder}
+        onChange={(next) => onChange(next === "" ? null : next)}
+      />
       {canFill ? (
         <div className="flex items-center gap-1.5">
           <Button className="px-1.5 py-0.5" onClick={() => onUseSuggestion(suggestion)}>
@@ -71,6 +100,7 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
     models,
     refreshModels,
     update,
+    selectMainModel,
     pick,
     start,
     stop,
@@ -110,6 +140,33 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
     { value: "", label: scanned.length === 0 ? "（目录里没有 .gguf）" : "（未选择，用 preload_model 兜底）" },
     ...scanned.map((m) => ({ value: m.path, label: describeModel(m) })),
   ];
+  /**
+   * 被剔除的附属文件（视觉投影 / 草稿模型）的说明。
+   *
+   * 过滤是对的，但**不能静默**：目录里有 8 个 .gguf 而下拉框只列 6 个，
+   * 不说一句就像文件丢了或扫漏了。它们各有专门的路径字段。
+   */
+  const hiddenFiles = models?.hidden ?? { mmproj: 0, draft: 0 };
+  const hiddenLabel = [
+    hiddenFiles.mmproj > 0 ? `${hiddenFiles.mmproj} 个 mmproj（视觉投影）` : "",
+    hiddenFiles.draft > 0 ? `${hiddenFiles.draft} 个草稿模型` : "",
+  ]
+    .filter((part) => part !== "")
+    .join("、");
+  const hiddenCount = hiddenFiles.mmproj + hiddenFiles.draft;
+  /**
+   * 约定子目录（`mmproj/`、`draft/`）里的附属文件。
+   *
+   * 文件名怎么起都行，靠目录归类 —— 这是上一轮"按名字过滤会漏掉不改名的文件"的补丁。
+   * 它们不占主模型列表，但要做成「视觉投影文件」「草稿模型」的下拉候选，否则约定就白约了。
+   */
+  const auxFiles = models?.aux ?? { mmproj: [], draft: [] };
+  const auxChoices = (list: { name: string; path: string; sizeMiB: number | null }[]) =>
+    list.map((m) => ({ value: m.path, label: m.sizeMiB === null ? m.name : `${m.name} · ${formatMiB(m.sizeMiB)}` }));
+  const auxNote =
+    auxFiles.mmproj.length + auxFiles.draft.length === 0
+      ? ""
+      : `；附属文件另见 mmproj/（${auxFiles.mmproj.length}）与 draft/（${auxFiles.draft.length}）`;
   /** 下拉框下面那行说明：目录对不上/读不了时如实说，别只给一个空下拉框 */
   const dirHint =
     models === null
@@ -117,8 +174,10 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
       : models.error !== undefined
         ? `⚠ ${models.error}`
         : scanned.length === 0
-          ? `模型目录 ${models.dir} 里没有 .gguf（只扫顶层，分片模型会自动合并成一条）`
-          : `共 ${scanned.length} 个模型（目录：${models.dir}）`;
+          ? hiddenCount > 0
+            ? `目录里只有 ${hiddenLabel}：它们不能单独当 -m 用，请用下方各自的路径字段选择`
+            : `模型目录 ${models.dir} 里没有 .gguf（只扫顶层，分片模型会自动合并成一条）`
+          : `共 ${scanned.length} 个模型（目录：${models.dir}）${hiddenCount > 0 ? `；已隐藏 ${hiddenLabel}` : ""}${auxNote}`;
 
   const presetModels = preview?.preset?.models ?? [];
   const preloadValue = typeof config.preload_model === "string" ? config.preload_model : "";
@@ -166,7 +225,7 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
         <div className="flex items-center justify-between">
           <span className="text-xs font-semibold text-[var(--text-primary)]">运行模式</span>
           <div className="flex gap-1 rounded-md bg-[var(--bg-input)] p-0.5 ring-1 ring-inset ring-[var(--border-strong)]">
-            {(["router", "single"] as const).map((mode) => (
+            {(["single", "router"] as const).map((mode) => (
               <button
                 key={mode}
                 type="button"
@@ -185,7 +244,7 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
         <p className="text-[10px] leading-4 text-[var(--text-muted)]">
           {router
             ? "router 模式：网页左上角可随时切换模型，无需重启；配置里 presets 定义过的键由 preset 按模型接管。"
-            : "单模型模式：一次只起一个 -m 指定的模型，所有参数都由命令行决定。"}
+            : "单模型模式：一次只起一个 -m 指定的模型，参数由命令行决定；选中模型时会先套用它自己的预设。"}
         </p>
       </section>
 
@@ -269,11 +328,16 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
                 disabled={dirOptions.length <= 1}
                 onChange={(next) => {
                   if (next === "") return;
-                  const picked = models?.models.find((m) => m.path === next);
-                  if (picked !== undefined) update({ main_model: picked.path });
+                  // 选中模型即套用它在 presets 里的参数：single 模式没有 --models-preset，
+                  // 不这样做的话配置文件里的预设对单模型永远不生效
+                  selectMainModel(next);
                 }}
               />
               <p className="text-[10px] leading-4 text-[var(--text-muted)]">{dirHint}</p>
+              <p className="text-[10px] leading-4 text-[var(--text-muted)]">
+                选中模型会把它在 presets 里的参数（ctx-size、cache-type、n-predict 等）填入下面的配置——
+                单模型与多模型都按同一份预设生效。
+              </p>
             </div>
             <PathRow
               label="主模型（-m）"
@@ -292,6 +356,9 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
           label="视觉投影文件（--mmproj）"
           value={typeof config.vision_model === "string" ? config.vision_model : ""}
           placeholder="多模态模型才需要"
+          choices={auxChoices(auxFiles.mmproj)}
+          choicesPlaceholder="（从 models\\mmproj\\ 选择…）"
+          hint="约定：mmproj 文件放 models\\mmproj\\ 子目录，这里会自动列出候选；目录外的用「浏览…」"
           onPick={() => void pick("vision_model", "gguf", "选择 mmproj 文件")}
           onChange={(next) => update({ vision_model: next ?? "" })}
         />
@@ -300,7 +367,9 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
           label="草稿模型（--spec-draft-model）"
           value={typeof config.draft_model === "string" ? config.draft_model : ""}
           placeholder="推测解码才需要"
-          hint="b10488 起改名为 --spec-draft-model；dflash / dspark / MTP 需要 b10679+ 开发版"
+          choices={auxChoices(auxFiles.draft)}
+          choicesPlaceholder="（从 models\\draft\\ 选择…）"
+          hint="约定：草稿模型放 models\\draft\\ 子目录（文件名随便叫）；b10488 起改名为 --spec-draft-model"
           onPick={() => void pick("draft_model", "gguf", "选择草稿模型")}
           onChange={(next) => update({ draft_model: next ?? "" })}
         />

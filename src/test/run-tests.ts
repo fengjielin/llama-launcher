@@ -39,3 +39,6 @@ import "./format.test.ts";
 
 // ---- 模型目录扫描（单模型模式的下拉框）----
 import "./models.test.ts";
+
+// ---- 预设 → 配置填充（单模型复用 presets 的口径）----
+import "./presetApply.test.ts";

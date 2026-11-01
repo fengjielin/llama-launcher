@@ -12,7 +12,7 @@ import type { BuildStep, LauncherConfig } from "../core/types.ts";
 import type { ParamGroup, ValueKind } from "../core/types.ts";
 import type { LogEventKind, LogMetrics } from "../core/logLines.ts";
 import type { MetricsSample, MetricsSeries } from "../core/metrics.ts";
-import type { ScannedModel } from "../core/models.ts";
+import type { NonModelKind, ScannedModel } from "../core/models.ts";
 import type { PrecheckReport } from "../core/precheck.ts";
 import type { ProfileInfo } from "../core/profiles.ts";
 
@@ -179,6 +179,10 @@ export interface ModelsPayload {
   exists: boolean;
   /** 扫到的模型（`ScannedModel` 加上"配置里有没有它的预设"） */
   models: (ScannedModel & { hasPreset: boolean })[];
+  /** 被剔除的附属文件数量（视觉投影 / 草稿模型）：界面据此说明"为什么目录里少了几项" */
+  hidden: Record<NonModelKind, number>;
+  /** 约定子目录（`mmproj/`、`draft/`）里的附属文件：两个附属字段的下拉候选 */
+  aux: Record<NonModelKind, ScannedModel[]>;
   /** 目录为空 / 不存在 / 读不了时的原因 */
   error?: string;
 }

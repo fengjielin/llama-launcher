@@ -17,7 +17,7 @@ function makeLlamaDir(dir: string): string {
   return resolve(dir);
 }
 
-test("模型布局探测：同级有 models 与 presets.ini → router + 预加载", () => {
+test("模型布局探测：同级有 models 与 presets.ini → 默认仍 single + 预加载", () => {
   const root = mkdtempSync(join(tmpdir(), "llama-layout-full-"));
   try {
     const llamaDir = makeLlamaDir(join(root, "llama.cpp"));
@@ -40,7 +40,7 @@ test("模型布局探测：同级有 models 与 presets.ini → router + 预加�
     assert.equal(layout.modelsDirExists, true);
     assert.equal(layout.presetPath, join(root, "presets.ini"));
     assert.equal(layout.preloadModel, "Qwen3-27B", "presets.ini 里写过的默认模型，且模型文件在 → 预加载");
-    assert.equal(layout.mode, "router", "有 presets.ini 就用 router");
+    assert.equal(layout.mode, "single", "探到 presets.ini 也只默认 single：预设仍会导入，但不替用户切 router");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -57,7 +57,7 @@ test("模型布局探测：presets.ini 在「一键启动脚本」子目录里�
 
     const layout = discoverModelLayout({ startDirs: [root], env: {} });
     assert.equal(layout.presetPath, preset);
-    assert.equal(layout.mode, "router");
+    assert.equal(layout.mode, "single");
     assert.equal(layout.preloadModel, "", "没有 default-model 就不预加载");
   } finally {
     rmSync(root, { recursive: true, force: true });

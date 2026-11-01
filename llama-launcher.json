@@ -1,0 +1,62 @@
+{
+  "llama_dir": "E:\\Code\\llama\\llama.cpp",
+  "mode": "single",
+  "models_dir": "E:\\Code\\llama\\models",
+  "presets": {
+    "Qwen3.8-27B-Uncensored-IQ4_XS": {
+      "ctx-size": 16384,
+      "n-predict": 8192
+    },
+    "Qwen3.8-27B-Uncensored-IQ2_M": {
+      "ctx-size": 32768,
+      "n-predict": 16384
+    },
+    "Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-IQ3_M": {
+      "ctx-size": 65536,
+      "n-predict": 16384
+    }
+  },
+  "models_preset": "E:\\Code\\llama\\一键启动脚本\\presets.ini",
+  "models_max": null,
+  "preload_model": "Qwen3.8-27B-Uncensored-IQ2_M",
+  "host": "127.0.0.1",
+  "port": 8080,
+  "parallel": null,
+  "context": 32768,
+  "max_predict": 16384,
+  "threads": null,
+  "batch_size": null,
+  "ubatch_size": null,
+  "gpu_layers": "auto",
+  "fit_target": 1024,
+  "fit_ctx": null,
+  "load_mode": "mmap+mlock",
+  "kv_k_type": "q4_0",
+  "kv_v_type": "q4_0",
+  "flash_attention": true,
+  "temperature": null,
+  "top_p": null,
+  "top_k": null,
+  "min_p": null,
+  "presence_penalty": null,
+  "repeat_penalty": null,
+  "think": "off",
+  "reasoning_effort": null,
+  "reasoning_budget": null,
+  "reasoning_preserve": false,
+  "jinja": true,
+  "tools_all": false,
+  "agent": false,
+  "spec_enabled": false,
+  "draft_n": null,
+  "rope_scale": null,
+  "yarn_orig_ctx": null,
+  "custom_args": "",
+  "mlock": false,
+  "no_mmap": false,
+  "no_warmup": false,
+  "no_webui": false,
+  "metrics": false,
+  "cpu_moe_layers": 4,
+  "main_gpu": null
+}

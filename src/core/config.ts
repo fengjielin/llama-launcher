@@ -260,13 +260,11 @@ export function normalizeConfig(raw: unknown): NormalizeResult {
   out.think = normalizeThink(src["think"]) ?? DEFAULT_CONFIG.think;
 
   // ---- 模式推断 ----
+  // 默认单模型：只有**显式**写了 `"mode": "router"` 才是 router。
+  // 早先的规则是「有 models_dir 就推断成 router」，于是只存了模型目录的老配置在打开时
+  // 会悄悄变成多模型 —— 与「打开即单模型」的默认预期相反。要 router 就把它写出来。
   const explicitMode = asString(src["mode"]);
-  const mode: ServerMode = explicitMode === "router" || explicitMode === "single"
-    ? explicitMode
-    : asString(src["models_dir"])
-      ? "router"
-      : "single";
-  out.mode = mode;
+  out.mode = explicitMode === "router" ? "router" : "single";
 
   // ---- 模型预设（JSON 原生格式）----
   // 只做形状收敛：模型名 → 参数表，值必须是字符串/数字/布尔。
@@ -507,7 +505,7 @@ export interface ModelLayout {
   presetPath: string;
   /** 按 presets.ini 的 `; default-model =` 约定推出的预加载模型名（且模型文件确实在）；没有则为空串 */
   preloadModel: string;
-  /** 建议的运行模式：有 presets.ini 就是 router（与既有 PS1 脚本及 `init` 的行为一致） */
+  /** 建议的运行模式：**一律 single**（默认单模型；router 必须由用户/配置显式指定） */
   mode: ServerMode;
 }
 
@@ -610,6 +608,8 @@ export function discoverModelLayout(input: {
     modelsDirExists,
     presetPath,
     preloadModel,
-    mode: presetPath !== "" ? "router" : "single",
+    // 默认单模型：探到 presets.ini 只意味着"预设可以导入"，不等于"要跑 router"。
+    // 首次运行就替用户切成多模型会让人以为默认模式变了（presets 仍会被 session 独立导入）。
+    mode: "single",
   };
 }

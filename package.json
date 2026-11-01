@@ -13,6 +13,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "icon": "node scripts/make-icon.mjs",
     "start": "electron-vite preview",
     "package": "electron-vite build && node scripts/package.mjs --win --dir",
     "package:touch": "electron-vite build && node scripts/package.mjs --win --dir",

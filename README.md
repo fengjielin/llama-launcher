@@ -708,7 +708,11 @@ exe 旁边还没有配置时，启动过程是「**生成 → 重新读一遍**�
    新旧两个 `app-builder-lib@*` 目录，**别用 `Select-Object -First 1` 去读，会读到废弃的那个**
    （我就这么误判过一次）。
 3. **图标给现成的 `.ico`**，不要让 electron-builder 从 PNG 转换（它的转换要调 app-builder 的二进制，本机报错）。
-   `build/icon.ico` 是手写的：ICO 头 + 内嵌一张 256×256 PNG（Windows Vista+ 原生支持这种形式）。
+   `build/icon.ico` 由 `scripts/make-icon.mjs` 生成（`pnpm icon`）：ICO 头 + 7 帧 32bpp BMP
+   （16/24/32/48/64/128/256），**每个尺寸单独光栅化**，不是把 512 缩下来，所以 16×16 也不糊。
+   生成器零依赖（SDF + 自写 PNG/ICO 编码），换方案用 `pnpm icon --variant=face` 或 `--list` 看全部。
+   注意 256 帧也用 BMP 而不是内嵌 PNG：实测 .NET 的 `System.Drawing.Icon` 只认 BMP 帧，
+   遇到 PNG 帧会静默退到 128。
 4. **产出的 `.asar` 会被本机的常驻进程长期占用，进而毒掉下一次打包**（详见「为什么要经过
    `scripts/package.mjs`」）。这里补一个实测数据，因为它决定了怎么修：本机残留的 4 个 `.asar`
    在**几个小时之后**依然处于「可正常读取、但改不了名也删不掉」的状态；而同一目录下新建的普通文件

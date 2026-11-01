@@ -4,7 +4,7 @@ import type { Tone } from "./ui.tsx";
 
 const REASON_TONE: Record<string, Tone> = {
   cli: "emerald",
-  "preload-override": "violet",
+  "preload-override": "muted",
   "preset-owned": "amber",
   unsupported: "rose",
   fallback: "amber",
@@ -19,10 +19,10 @@ export function DecisionTable({ launcher }: { launcher: LauncherController }) {
   const { preview, previewError } = launcher;
 
   if (previewError !== null) {
-    return <div className="p-4 text-xs text-rose-300">命令行拼装失败：{previewError}</div>;
+    return <div className="p-4 text-xs text-[var(--danger)]">命令行拼装失败：{previewError}</div>;
   }
   if (preview === null) {
-    return <div className="p-4 text-xs text-slate-500">正在拼装…</div>;
+    return <div className="p-4 text-xs text-[var(--text-muted)]">正在拼装…</div>;
   }
 
   const counts = new Map<string, number>();
@@ -34,7 +34,7 @@ export function DecisionTable({ launcher }: { launcher: LauncherController }) {
   return (
     <div className="h-full overflow-y-auto px-4 py-3">
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <Badge tone="sky">
+        <Badge tone="accent">
           共 {preview.steps.length} 项，实际传入 {emitted} 项
         </Badge>
         {[...counts.entries()].map(([reason, count]) => (
@@ -46,7 +46,7 @@ export function DecisionTable({ launcher }: { launcher: LauncherController }) {
 
       <table className="w-full border-collapse">
         <thead>
-          <tr className="border-b border-[#1e2530] text-left text-[11px] text-slate-500">
+          <tr className="border-b border-[var(--border-subtle)] text-left text-[11px] text-[var(--text-muted)]">
             <th className="py-1.5 pr-3 font-medium">原因</th>
             <th className="py-1.5 pr-3 font-medium">参数</th>
             <th className="py-1.5 pr-3 font-medium">实际传入</th>
@@ -55,15 +55,15 @@ export function DecisionTable({ launcher }: { launcher: LauncherController }) {
         </thead>
         <tbody>
           {preview.steps.map((step) => (
-            <tr key={step.key} className="border-b border-[#161b24] align-top">
+            <tr key={step.key} className="border-b border-[var(--border-subtle)] align-top">
               <td className="whitespace-nowrap py-1.5 pr-3">
                 <Badge tone={REASON_TONE[step.reason] ?? "slate"}>{step.reasonLabel}</Badge>
               </td>
-              <td className="whitespace-nowrap py-1.5 pr-3 text-xs text-slate-300">{step.label}</td>
-              <td className="mono py-1.5 pr-3 text-[11px] break-all text-emerald-300">
-                {step.argvText === "" ? <span className="text-slate-600">—</span> : step.argvText}
+              <td className="whitespace-nowrap py-1.5 pr-3 text-xs text-[var(--text-secondary)]">{step.label}</td>
+              <td className="mono py-1.5 pr-3 text-[11px] break-all text-[var(--mono-emit)]">
+                {step.argvText === "" ? <span className="text-[var(--text-muted)]">—</span> : step.argvText}
               </td>
-              <td className="py-1.5 text-[11px] leading-5 text-slate-500">{step.note}</td>
+              <td className="py-1.5 text-[11px] leading-5 text-[var(--text-muted)]">{step.note}</td>
             </tr>
           ))}
         </tbody>

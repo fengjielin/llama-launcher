@@ -5,14 +5,14 @@ export function TopBar({ launcher }: { launcher: LauncherController }) {
   const { detect, detectError, busy, configPath, config } = launcher;
 
   return (
-    <header className="flex shrink-0 items-center gap-3 border-b border-[#1e2530] bg-[#0f131b] px-4 py-2.5">
+    <header className="flex shrink-0 items-center gap-3 border-b border-[var(--border-subtle)] bg-[var(--bg-panel)] px-4 py-2.5">
       <div className="flex items-baseline gap-2">
-        <span className="text-sm font-semibold text-slate-100">llama.cpp 启动器</span>
-        <span className="text-[11px] text-slate-500">core + Electron</span>
+        <span className="text-sm font-semibold text-[var(--text-primary)]">llama.cpp 启动器</span>
+        <span className="text-[11px] text-[var(--text-muted)]">core + Electron</span>
       </div>
 
       {detect?.build != null ? (
-        <Badge tone="sky" title={detect.versionLine}>
+        <Badge tone="accent" title={detect.versionLine}>
           b{detect.build}
         </Badge>
       ) : null}
@@ -27,7 +27,7 @@ export function TopBar({ launcher }: { launcher: LauncherController }) {
         </Badge>
       ) : null}
 
-      <div className="min-w-0 flex-1 truncate text-[11px] text-slate-500" title={configPath}>
+      <div className="min-w-0 flex-1 truncate text-[11px] text-[var(--text-muted)]" title={configPath}>
         配置：{configPath}
       </div>
 

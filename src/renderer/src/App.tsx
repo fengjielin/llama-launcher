@@ -33,15 +33,15 @@ export default function App() {
   if (launcher.bridgeMissing) {
     return (
       <div className="flex h-full items-center justify-center p-8">
-        <div className="max-w-xl space-y-3 rounded-lg border border-amber-900/50 bg-amber-950/20 p-5">
-          <h1 className="text-sm font-semibold text-amber-200">这个界面需要通过 Electron 启动</h1>
-          <p className="text-xs leading-6 text-amber-200/80">
+        <div className="max-w-xl space-y-3 rounded-md border border-[var(--flash-ok-border)] bg-[color-mix(in_srgb,var(--warn)_8%,transparent)] p-5">
+          <h1 className="text-sm font-semibold text-[var(--warn)]">这个界面需要通过 Electron 启动</h1>
+          <p className="text-xs leading-6 text-[color-mix(in_srgb,var(--warn)_80%,transparent)]">
             界面拿不到 <span className="mono">window.llamaApi</span>（preload 注入的桥），说明它是被浏览器直接打开的。
             请用桌面壳启动：
           </p>
-          <pre className="mono rounded bg-[#0b0e14] px-3 py-2 text-[11px] text-slate-300">pnpm dev        # 开发模式
+          <pre className="mono rounded bg-[var(--bg-input)] px-3 py-2 text-[11px] text-[var(--text-secondary)]">pnpm dev        # 开发模式
 pnpm build && pnpm start   # 构建后运行</pre>
-          <p className="text-xs leading-6 text-amber-200/80">
+          <p className="text-xs leading-6 text-[color-mix(in_srgb,var(--warn)_80%,transparent)]">
             只是想跑服务的话，core 本身不依赖界面：
             <span className="mono"> pnpm args</span> 看命令行、<span className="mono">pnpm run</span> 直接启动。
           </p>
@@ -51,7 +51,7 @@ pnpm build && pnpm start   # 构建后运行</pre>
   }
 
   if (!launcher.ready) {
-    return <div className="flex h-full items-center justify-center text-xs text-slate-500">正在初始化…</div>;
+    return <div className="flex h-full items-center justify-center text-xs text-[var(--text-muted)]">正在初始化…</div>;
   }
 
   const steps = launcher.preview?.steps.length ?? 0;
@@ -72,13 +72,13 @@ pnpm build && pnpm start   # 构建后运行</pre>
   const precheckErrors = (launcher.precheck?.items ?? []).filter((item) => item.level === "error");
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col bg-[var(--bg-app)]">
       <TopBar launcher={launcher} />
 
       {launcher.flash !== null ? (
-        <div className="flex shrink-0 items-center gap-2 border-b border-sky-900/50 bg-sky-950/30 px-4 py-1.5">
-          <Badge tone="sky">完成</Badge>
-          <span className="min-w-0 flex-1 text-xs text-sky-100">{launcher.flash}</span>
+        <div className="flex shrink-0 items-center gap-2 border-b border-[var(--flash-ok-border)] bg-[var(--flash-ok-bg)] px-4 py-1.5">
+          <Badge tone="emerald">完成</Badge>
+          <span className="min-w-0 flex-1 text-xs text-[var(--ok)]">{launcher.flash}</span>
           <Button variant="ghost" onClick={launcher.dismissFlash}>
             知道了
           </Button>
@@ -86,9 +86,9 @@ pnpm build && pnpm start   # 构建后运行</pre>
       ) : null}
 
       {launcher.error !== null ? (
-        <div className="flex shrink-0 items-center gap-2 border-b border-rose-900/50 bg-rose-950/30 px-4 py-1.5">
+        <div className="flex shrink-0 items-center gap-2 border-b border-[var(--flash-danger-border)] bg-[var(--flash-danger-bg)] px-4 py-1.5">
           <Badge tone="rose">出错</Badge>
-          <span className="min-w-0 flex-1 text-xs text-rose-200">{launcher.error}</span>
+          <span className="min-w-0 flex-1 text-xs text-[var(--danger)]">{launcher.error}</span>
           <Button variant="ghost" onClick={launcher.dismissError}>
             知道了
           </Button>
@@ -102,9 +102,9 @@ pnpm build && pnpm start   # 构建后运行</pre>
           <CommandBar launcher={launcher} />
 
           {precheckErrors.length > 0 ? (
-            <div className="flex shrink-0 items-start gap-2 border-b border-rose-900/50 bg-rose-950/30 px-4 py-1.5">
+            <div className="flex shrink-0 items-start gap-2 border-b border-[var(--flash-danger-border)] bg-[var(--flash-danger-bg)] px-4 py-1.5">
               <Badge tone="rose">环境自检不通过</Badge>
-              <span className="min-w-0 flex-1 text-xs text-rose-200">
+              <span className="min-w-0 flex-1 text-xs text-[var(--danger)]">
                 {precheckErrors.map((item) => item.title).join("；")}
               </span>
               <Button variant="ghost" onClick={() => setTab("precheck")}>
@@ -113,7 +113,7 @@ pnpm build && pnpm start   # 构建后运行</pre>
             </div>
           ) : null}
 
-          <nav className="flex shrink-0 items-center gap-1 border-b border-[#1e2530] px-4">
+          <nav className="flex shrink-0 items-center gap-1 border-b border-[var(--border-subtle)] px-4">
             {TABS.map((item) => (
               <button
                 key={item.id}
@@ -121,12 +121,12 @@ pnpm build && pnpm start   # 构建后运行</pre>
                 onClick={() => setTab(item.id)}
                 className={`-mb-px border-b-2 px-3 py-2 text-xs transition-colors ${
                   tab === item.id
-                    ? "border-sky-500 text-slate-100"
-                    : "border-transparent text-slate-500 hover:text-slate-300"
+                    ? "border-[var(--accent)] text-[var(--text-primary)]"
+                    : "border-transparent text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
                 }`}
               >
                 {item.label}
-                <span className="ml-1.5 text-[10px] text-slate-600">{tabCount(item.id)}</span>
+                <span className="ml-1.5 text-[10px] text-[var(--text-muted)]">{tabCount(item.id)}</span>
               </button>
             ))}
           </nav>

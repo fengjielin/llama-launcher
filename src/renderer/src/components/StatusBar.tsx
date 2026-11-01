@@ -26,17 +26,17 @@ export function StatusBar({ launcher }: { launcher: LauncherController }) {
   const health = status?.health ?? null;
 
   return (
-    <footer className="flex shrink-0 items-center gap-3 border-t border-[#1e2530] bg-[#0f131b] px-4 py-1.5 text-[11px] text-slate-500">
+    <footer className="flex shrink-0 items-center gap-3 border-t border-[var(--border-subtle)] bg-[var(--bg-panel)] px-4 py-1.5 text-[11px] text-[var(--text-muted)]">
       <Badge tone={STATE_TONE[state] ?? "slate"} title={status?.note ?? ""}>
         {state}
       </Badge>
-      <span className="min-w-0 truncate" title={status?.note ?? ""}>
+      <span className="min-w-0 truncate text-[var(--text-secondary)]" title={status?.note ?? ""}>
         {status?.note ?? "未启动"}
       </span>
 
-      {status?.pid != null ? <span className="mono">PID {status.pid}</span> : null}
+      {status?.pid != null ? <span className="mono text-[var(--text-secondary)]">PID {status.pid}</span> : null}
 
-      <span className="mono truncate" title={status?.baseUrl ?? ""}>
+      <span className="mono truncate text-[var(--text-muted)]" title={status?.baseUrl ?? ""}>
         {status?.baseUrl ?? ""}
       </span>
 
@@ -47,7 +47,7 @@ export function StatusBar({ launcher }: { launcher: LauncherController }) {
       ) : null}
 
       <span className="ml-auto flex items-center gap-3">
-        {busy !== null ? <span className="text-sky-400">进行中：{busy}</span> : null}
+        {busy !== null ? <span className="text-[var(--accent)]">进行中：{busy}</span> : null}
         <span>日志 {logs.length} 行</span>
       </span>
     </footer>

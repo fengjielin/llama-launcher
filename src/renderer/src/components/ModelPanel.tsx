@@ -36,7 +36,7 @@ function PathRow({
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] text-slate-400">{label}</span>
+        <span className="text-[11px] text-[var(--text-secondary)]">{label}</span>
         <Button onClick={onPick} className="px-1.5 py-0.5">
           浏览…
         </Button>
@@ -47,12 +47,12 @@ function PathRow({
           <Button className="px-1.5 py-0.5" onClick={() => onUseSuggestion(suggestion)}>
             填入探测值
           </Button>
-          <span className="mono truncate text-[10px] text-slate-500" title={suggestion}>
+          <span className="mono truncate text-[10px] text-[var(--text-muted)]" title={suggestion}>
             {suggestion}
           </span>
         </div>
       ) : null}
-      {hint !== undefined ? <p className="text-[10px] leading-4 text-slate-500">{hint}</p> : null}
+      {hint !== undefined ? <p className="text-[10px] leading-4 text-[var(--text-muted)]">{hint}</p> : null}
     </div>
   );
 }
@@ -131,9 +131,9 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
   ];
 
   return (
-    <aside className="flex w-96 shrink-0 flex-col gap-3 overflow-y-auto border-r border-[#1e2530] bg-[#0f131b] px-3 py-3">
+    <aside className="flex w-96 shrink-0 flex-col gap-3 overflow-y-auto border-r border-[var(--border-subtle)] bg-[var(--bg-app)] px-3 py-3">
       {/* 启停控制放最上面：这是最常用的操作 */}
-      <section className="rounded-lg border border-[#1e2530] bg-[#11151d] p-3">
+      <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3">
         <div className="flex items-center gap-2">
           {running ? (
             <Button variant="danger" className="flex-1 justify-center py-2" onClick={() => void stop()} disabled={busy !== null}>
@@ -154,25 +154,27 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
             打开网页
           </Button>
         </div>
-        <p className="mt-2 text-[11px] leading-4 text-slate-500">{status?.note ?? "未启动"}</p>
+        <p className="mt-2 text-[11px] leading-4 text-[var(--text-muted)]">{status?.note ?? "未启动"}</p>
         {running && status?.health?.state === "loading" ? (
-          <p className="mt-1 text-[11px] leading-4 text-amber-300">
+          <p className="mt-1 text-[11px] leading-4 text-[var(--warn)]">
             服务已在监听，但模型还没加载（router 模式下点开网页就会自动加载）
           </p>
         ) : null}
       </section>
 
-      <section className="space-y-2 rounded-lg border border-[#1e2530] bg-[#11151d] p-3">
+      <section className="space-y-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3">
         <div className="flex items-center justify-between">
-          <span className="text-xs font-semibold text-slate-300">运行模式</span>
-          <div className="flex gap-1 rounded-md bg-[#0d1117] p-0.5 ring-1 ring-inset ring-[#2a3444]">
+          <span className="text-xs font-semibold text-[var(--text-primary)]">运行模式</span>
+          <div className="flex gap-1 rounded-md bg-[var(--bg-input)] p-0.5 ring-1 ring-inset ring-[var(--border-strong)]">
             {(["router", "single"] as const).map((mode) => (
               <button
                 key={mode}
                 type="button"
                 onClick={() => update({ mode })}
                 className={`rounded px-2 py-0.5 text-[11px] transition-colors ${
-                  (config.mode ?? "single") === mode ? "bg-sky-600 text-white" : "text-slate-400 hover:text-slate-200"
+                  (config.mode ?? "single") === mode
+                    ? "bg-[var(--accent-solid)] text-white"
+                    : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
                 }`}
               >
                 {mode === "router" ? "多模型 router" : "单模型"}
@@ -180,15 +182,15 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
             ))}
           </div>
         </div>
-        <p className="text-[10px] leading-4 text-slate-500">
+        <p className="text-[10px] leading-4 text-[var(--text-muted)]">
           {router
             ? "router 模式：网页左上角可随时切换模型，无需重启；配置里 presets 定义过的键由 preset 按模型接管。"
             : "单模型模式：一次只起一个 -m 指定的模型，所有参数都由命令行决定。"}
         </p>
       </section>
 
-      <section className="space-y-3 rounded-lg border border-[#1e2530] bg-[#11151d] p-3">
-        <span className="text-xs font-semibold text-slate-300">模型</span>
+      <section className="space-y-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3">
+        <span className="text-xs font-semibold text-[var(--text-primary)]">模型</span>
 
         {router ? (
           <>
@@ -204,17 +206,17 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
             />
             <div className="space-y-1">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-[11px] text-slate-400">模型预设（presets）</span>
+                <span className="text-[11px] text-[var(--text-secondary)]">模型预设（presets）</span>
                 <Button onClick={() => void importPresets()} className="px-1.5 py-0.5">
                   导入 presets.ini…
                 </Button>
               </div>
-              <p className="text-[10px] leading-4 text-slate-500">
+              <p className="text-[10px] leading-4 text-[var(--text-muted)]">
                 {presetNames.length === 0
                   ? "还没有预设：每个模型都用同一套命令行参数。"
                   : `已为 ${presetNames.length} 个模型定义预设：${presetNames.join("、")}`}
               </p>
-              <p className="text-[10px] leading-4 text-slate-500">
+              <p className="text-[10px] leading-4 text-[var(--text-muted)]">
                 预设就写在配置文件的 <span className="mono">presets</span> 字段里（模型名 → 参数表，
                 键名用 llama.cpp 自己的，如 <span className="mono">ctx-size</span> /
                 <span className="mono">cache-type-k</span> / <span className="mono">fit-target</span>），
@@ -222,19 +224,19 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
               </p>
             </div>
             <div className="space-y-1">
-              <span className="text-[11px] text-slate-400">启动预加载模型</span>
+              <span className="text-[11px] text-[var(--text-secondary)]">启动预加载模型</span>
               <Select
                 className="w-full"
                 value={preloadValue}
                 options={preloadOptions}
                 onChange={(next) => update({ preload_model: next })}
               />
-              <p className="text-[10px] leading-4 text-slate-500">
+              <p className="text-[10px] leading-4 text-[var(--text-muted)]">
                 预加载的模型实测【不吃 preset】，所以 ctx / KV / fit 等参数会改由命令行直传。
               </p>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-[11px] text-slate-400">同时加载模型数</span>
+              <span className="text-[11px] text-[var(--text-secondary)]">同时加载模型数</span>
               <NumberInput
                 value={typeof config.models_max === "number" ? config.models_max : null}
                 placeholder="默认"
@@ -251,7 +253,7 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
             */}
             <div className="space-y-1">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-[11px] text-slate-400">从模型目录选择</span>
+                <span className="text-[11px] text-[var(--text-secondary)]">从模型目录选择</span>
                 <Button
                   onClick={() => void refreshModels()}
                   className="px-1.5 py-0.5"
@@ -271,7 +273,7 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
                   if (picked !== undefined) update({ main_model: picked.path });
                 }}
               />
-              <p className="text-[10px] leading-4 text-slate-500">{dirHint}</p>
+              <p className="text-[10px] leading-4 text-[var(--text-muted)]">{dirHint}</p>
             </div>
             <PathRow
               label="主模型（-m）"
@@ -304,10 +306,10 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
         />
       </section>
 
-      <section className="space-y-2 rounded-lg border border-[#1e2530] bg-[#11151d] p-3">
+      <section className="space-y-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3">
         <div className="flex items-center justify-between">
-          <span className="text-xs font-semibold text-slate-300">llama.cpp</span>
-          {detect?.build != null ? <Badge tone="sky">b{detect.build}</Badge> : <Badge tone="amber">未探测</Badge>}
+          <span className="text-xs font-semibold text-[var(--text-primary)]">llama.cpp</span>
+          {detect?.build != null ? <Badge tone="accent">b{detect.build}</Badge> : <Badge tone="amber">未探测</Badge>}
         </div>
         <PathRow
           label="构建目录"
@@ -318,7 +320,7 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
           onChange={(next) => update({ llama_dir: next ?? "" })}
         />
         {detect !== null && detect.ok ? (
-          <p className="text-[10px] leading-4 text-slate-500">
+          <p className="text-[10px] leading-4 text-[var(--text-muted)]">
             参数名已改名 {detect.renamed.length} 项 · 本版本不支持 {detect.unsupported.length} 项 · 已废弃{" "}
             {detect.deprecated.length} 项
           </p>
@@ -326,14 +328,14 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
       </section>
 
       {/* ---- 配置档案：一个档案 = 一个 JSON 文件，随时切换整套「模型 + 参数」 ---- */}
-      <section className="space-y-2 rounded-lg border border-[#1e2530] bg-[#11151d] p-3">
+      <section className="space-y-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-semibold text-slate-300">配置档案</span>
+          <span className="text-xs font-semibold text-[var(--text-primary)]">配置档案</span>
           <Button onClick={() => void revealProfiles()} title={profilesDir === "" ? "档案目录" : profilesDir} className="px-1.5 py-0.5">
             打开目录
           </Button>
         </div>
-        <p className="text-[10px] leading-4 text-slate-500">
+        <p className="text-[10px] leading-4 text-[var(--text-muted)]">
           一个档案 = 目录里的一个 JSON 文件，可以直接拷给别人。载入档案会把它设为当前配置，
           之后「保存」就写回这套档案。
         </p>
@@ -370,13 +372,13 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
             {profiles.map((profile) => (
               <span
                 key={profile.name}
-                className="inline-flex items-center gap-1 rounded bg-[#1b2230] px-2 py-0.5 text-[11px] text-slate-300"
+                className="inline-flex items-center gap-1 rounded bg-[var(--bg-elevated)] px-2 py-0.5 text-[11px] text-[var(--text-primary)]"
                 title={`${profile.summary.mode} · 端口 ${profile.summary.port ?? "?"} · ctx ${profile.summary.context ?? "?"}\n${profile.path}`}
               >
                 {profile.name}
                 <button
                   type="button"
-                  className="text-slate-500 transition-colors hover:text-rose-300"
+                  className="text-[var(--text-muted)] transition-colors hover:text-[var(--danger)]"
                   title="删除这个档案"
                   disabled={busy !== null}
                   onClick={() => void removeProfile(profile.name)}
@@ -390,10 +392,10 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
       </section>
 
       {/* ---- 启动器设置：开机自启与关闭窗口行为 ---- */}
-      <section className="space-y-2 rounded-lg border border-[#1e2530] bg-[#11151d] p-3">
-        <span className="text-xs font-semibold text-slate-300">启动器设置</span>
+      <section className="space-y-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3">
+        <span className="text-xs font-semibold text-[var(--text-primary)]">启动器设置</span>
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[11px] text-slate-400">开机自启（带 --hidden，只驻留托盘）</span>
+          <span className="text-[11px] text-[var(--text-secondary)]">开机自启（带 --hidden，只驻留托盘）</span>
           <Toggle
             checked={settings?.openAtLogin === true}
             disabled={busy !== null || settings?.autostartSupported !== true}
@@ -401,7 +403,7 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
           />
         </div>
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[11px] text-slate-400">关闭窗口时缩到托盘（服务继续跑）</span>
+          <span className="text-[11px] text-[var(--text-secondary)]">关闭窗口时缩到托盘（服务继续跑）</span>
           <Toggle
             checked={settings?.minimizeToTray === true}
             disabled={busy !== null}
@@ -409,26 +411,26 @@ export function ModelPanel({ launcher }: { launcher: LauncherController }) {
           />
         </div>
         {settings !== null && !settings.autostartSupported ? (
-          <p className="text-[10px] leading-4 text-slate-500">
+          <p className="text-[10px] leading-4 text-[var(--text-muted)]">
             当前平台不支持开机自启（Linux 需要安装桌面项，暂未实现）。
           </p>
         ) : null}
         {settings !== null ? (
-          <p className="text-[10px] leading-4 text-slate-500">
+          <p className="text-[10px] leading-4 text-[var(--text-muted)]">
             {settings.minimizeToTray
               ? "已开启缩到托盘：点窗口的 ✕ 只是隐藏，服务不会停；真正退出请用托盘菜单的「退出」。"
               : "未开启：服务在跑时点 ✕ 会先问一次（退出并停止服务 / 缩到托盘继续跑）；服务没跑就直接退出。"}
           </p>
         ) : null}
-        <div className="space-y-0.5 border-t border-[#1e2530] pt-1.5">
-          <p className="text-[10px] leading-4 text-slate-400">
+        <div className="space-y-0.5 border-t border-[var(--border-subtle)] pt-1.5">
+          <p className="text-[10px] leading-4 text-[var(--text-secondary)]">
             {settings?.portable === true
               ? "便携模式：配置与数据都在应用目录内，%APPDATA% 里不留东西"
               : "配置与数据放在用户数据目录（应用目录不可写时的回退）"}
           </p>
-          <p className="break-all text-[10px] leading-4 text-slate-500">配置：{settings?.configPath ?? "读取中…"}</p>
-          <p className="break-all text-[10px] leading-4 text-slate-500">数据：{settings?.dataDir ?? "读取中…"}</p>
-          <p className="break-all text-[10px] leading-4 text-slate-500">设置：{settings?.settingsPath ?? "读取中…"}</p>
+          <p className="break-all text-[10px] leading-4 text-[var(--text-muted)]">配置：{settings?.configPath ?? "读取中…"}</p>
+          <p className="break-all text-[10px] leading-4 text-[var(--text-muted)]">数据：{settings?.dataDir ?? "读取中…"}</p>
+          <p className="break-all text-[10px] leading-4 text-[var(--text-muted)]">设置：{settings?.settingsPath ?? "读取中…"}</p>
         </div>
       </section>
     </aside>

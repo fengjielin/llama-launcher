@@ -1,5 +1,46 @@
 @import "tailwindcss";
 
+:root {
+  /* Surfaces — graphite */
+  --bg-app: #0c0f12;
+  --bg-panel: #12161b;
+  --bg-elevated: #171c22;
+  --bg-input: #0a0d10;
+  --bg-command: #0a0e11;
+  --border-subtle: #1c232b;
+  --border-strong: #2a3340;
+
+  /* Text */
+  --text-primary: #e6edf3;
+  --text-secondary: #9aa7b5;
+  --text-muted: #6b7785;
+  --text-inverse: #0c0f12;
+
+  /* Semantic */
+  --accent: #2dd4bf;
+  --accent-solid: #0f766e;
+  --accent-solid-hover: #0d9488;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --danger: #f87171;
+  --info: #7dd3fc;
+  --mono-emit: #6ee7b7;
+  --mono-env: #fcd34d;
+
+  /* Semantic surfaces */
+  --flash-ok-bg: color-mix(in srgb, var(--ok) 12%, transparent);
+  --flash-ok-border: color-mix(in srgb, var(--ok) 35%, transparent);
+  --flash-danger-bg: color-mix(in srgb, var(--danger) 12%, transparent);
+  --flash-danger-border: color-mix(in srgb, var(--danger) 35%, transparent);
+  --diag-danger-bg: color-mix(in srgb, var(--danger) 14%, transparent);
+  --diag-danger-border: color-mix(in srgb, var(--danger) 40%, transparent);
+  --accent-soft-bg: color-mix(in srgb, var(--accent) 12%, transparent);
+  --accent-soft-border: color-mix(in srgb, var(--accent) 35%, transparent);
+
+  --font-ui: "IBM Plex Sans", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Cascadia Mono", Consolas, "Courier New", monospace;
+}
+
 html,
 body,
 #root {
@@ -8,9 +49,9 @@ body,
 }
 
 body {
-  font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
-  background: #0b0e14;
-  color: #cbd5e1;
+  font-family: var(--font-ui);
+  background: var(--bg-app);
+  color: var(--text-secondary);
   overflow: hidden;
 }
 
@@ -20,16 +61,16 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: #0f131b;
+  background: var(--bg-panel);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #2a3241;
+  background: var(--border-strong);
   border-radius: 6px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3b4657;
+  background: color-mix(in srgb, var(--border-strong) 70%, var(--text-muted));
 }
 
 input[type="number"]::-webkit-outer-spin-button,
@@ -39,10 +80,11 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .mono {
-  font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 /* 日志里的时间戳前缀：结构化的 llama.cpp 日志形如 0.00.146.987 W srv  llama_server: xxx */
 .log-time {
-  color: #4b5563;
+  color: var(--text-muted);
 }

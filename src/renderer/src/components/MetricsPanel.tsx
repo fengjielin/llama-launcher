@@ -27,7 +27,7 @@ import { Badge, Section } from "./ui.tsx";
 function Sparkline({ values, color, height = 28 }: { values: (number | null)[]; color: string; height?: number }): ReactNode {
   const numbers = values.filter((v): v is number => v !== null);
   if (numbers.length < 2) {
-    return <div className="flex h-7 items-center text-[10px] text-slate-600">数据不足</div>;
+    return <div className="flex h-7 items-center text-[10px] text-[var(--text-muted)]">数据不足</div>;
   }
 
   const min = Math.min(...numbers);
@@ -96,20 +96,20 @@ function StatCard({
   bar?: number | null;
 }): ReactNode {
   return (
-    <div className="rounded-lg border border-[#1e2530] bg-[#11151d] px-3 py-2.5">
+    <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 py-2.5">
       <div className="flex items-baseline justify-between gap-2">
-        <span className="text-[11px] text-slate-400">{title}</span>
-        <span className="mono text-sm font-medium text-slate-100">{value}</span>
+        <span className="text-[11px] text-[var(--text-secondary)]">{title}</span>
+        <span className="mono text-sm font-medium text-[var(--text-primary)]">{value}</span>
       </div>
       {bar === null ? null : (
-        <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-[#1b2230]">
+        <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-[var(--bg-elevated)]">
           <div className={`h-full rounded-full ${usageBarColor(bar)}`} style={{ width: `${Math.round(bar * 100)}%` }} />
         </div>
       )}
       <div className="mt-1">
         <Sparkline values={series} color={color} />
       </div>
-      {sub === undefined ? null : <p className="mt-0.5 text-[10px] text-slate-500">{sub}</p>}
+      {sub === undefined ? null : <p className="mt-0.5 text-[10px] text-[var(--text-muted)]">{sub}</p>}
     </div>
   );
 }
@@ -118,9 +118,9 @@ function StatCard({
 function GpuHeader({ gpu, count }: { gpu: GpuStat; count: number }): ReactNode {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Badge tone="sky">{gpu.name}</Badge>
+      <Badge tone="accent">{gpu.name}</Badge>
       {count > 1 ? <Badge tone="slate">检测到 {count} 张卡，这里显示主卡</Badge> : null}
-      <span className="text-[11px] text-slate-500">
+      <span className="text-[11px] text-[var(--text-muted)]">
         显存 {formatMiB(gpu.vramTotalMiB)}
         {gpu.powerLimitW === null ? "" : ` · 功耗上限 ${gpu.powerLimitW.toFixed(0)} W`}
         {gpu.clockSmMHz === null ? "" : ` · SM ${gpu.clockSmMHz} MHz`}
@@ -148,7 +148,7 @@ export function MetricsPanel({ launcher }: { launcher: LauncherController }): Re
   }, [watchMetrics]);
 
   if (metrics === null) {
-    return <div className="p-4 text-xs text-slate-500">正在采集…（打开本页会开始每秒采样一次）</div>;
+    return <div className="p-4 text-xs text-[var(--text-muted)]">正在采集…（打开本页会开始每秒采样一次）</div>;
   }
 
   const latest = metrics.latest;
@@ -162,24 +162,24 @@ export function MetricsPanel({ launcher }: { launcher: LauncherController }): Re
   return (
     <div className="h-full space-y-3 overflow-y-auto px-4 py-3">
       {metrics.gpuError === null ? null : (
-        <div className="rounded-md border border-amber-900/50 bg-amber-950/20 px-3 py-2">
+        <div className="rounded-md border border-[var(--flash-ok-border)] bg-[color-mix(in_srgb,var(--warn)_8%,transparent)] px-3 py-2">
           <div className="flex items-center gap-2">
             <Badge tone="amber">没有可用的 GPU 数据</Badge>
-            <span className="text-[11px] text-amber-200/80">{metrics.gpuError}</span>
+            <span className="text-[11px] text-[var(--warn)]">{metrics.gpuError}</span>
           </div>
-          <p className="mt-1 text-[11px] text-amber-200/70">
+          <p className="mt-1 text-[11px] text-[color-mix(in_srgb,var(--warn)_75%,transparent)]">
             非 NVIDIA 显卡或没装 nvidia-smi 都会这样，不影响 llama.cpp 用纯 CPU 或其它后端跑。
           </p>
         </div>
       )}
 
       {latest === null ? (
-        <p className="text-xs text-slate-500">正在采集第一组数据…</p>
+        <p className="text-xs text-[var(--text-muted)]">正在采集第一组数据…</p>
       ) : (
         <>
           <Section title="GPU" right={gpu === null ? <Badge tone="slate">无数据</Badge> : undefined}>
             {gpu === null ? (
-              <p className="text-[11px] text-slate-500">当前没有检测到 NVIDIA 显卡。</p>
+              <p className="text-[11px] text-[var(--text-muted)]">当前没有检测到 NVIDIA 显卡。</p>
             ) : (
               <div className="space-y-2.5">
                 <GpuHeader gpu={gpu} count={latest.gpus.length} />
@@ -189,7 +189,7 @@ export function MetricsPanel({ launcher }: { launcher: LauncherController }): Re
                     value={formatMiB(gpu.vramUsedMiB)}
                     sub={`共 ${formatMiB(gpu.vramTotalMiB)} · 剩余 ${formatMiB(gpu.vramFreeMiB)}`}
                     series={series.vramUsedMiB}
-                    color="#38bdf8"
+                    color="var(--info)"
                     bar={vramRatio}
                   />
                   <StatCard
@@ -197,20 +197,20 @@ export function MetricsPanel({ launcher }: { launcher: LauncherController }): Re
                     value={formatPct(gpu.utilizationPct)}
                     sub={`显存控制器 ${formatPct(gpu.memoryUtilizationPct)}`}
                     series={series.gpuUtilPct}
-                    color="#a78bfa"
+                    color="var(--accent)"
                   />
                   <StatCard
                     title="温度"
                     value={gpu.temperatureC === null ? "N/A" : `${gpu.temperatureC} ℃`}
                     series={series.temperatureC}
-                    color="#fb7185"
+                    color="var(--danger)"
                   />
                   <StatCard
                     title="功耗"
                     value={gpu.powerDrawW === null ? "N/A" : `${gpu.powerDrawW.toFixed(1)} W`}
                     sub={gpu.powerLimitW === null ? undefined : `上限 ${gpu.powerLimitW.toFixed(0)} W`}
                     series={series.powerW}
-                    color="#fbbf24"
+                    color="var(--warn)"
                   />
                 </div>
               </div>
@@ -228,14 +228,14 @@ export function MetricsPanel({ launcher }: { launcher: LauncherController }): Re
                     : `${cpu.cores} 逻辑核心 · ${cpu.model}${cpu.loadAvg1 === null ? "" : ` · load ${cpu.loadAvg1.toFixed(2)}`}`
                 }
                 series={series.cpuPct}
-                color="#34d399"
+                color="var(--ok)"
               />
               <StatCard
                 title="内存占用"
                 value={memory === null ? "N/A" : formatPct(memory.usedPct)}
                 sub={memory === null ? undefined : `已用 ${formatMiB(memory.usedMiB)} / 共 ${formatMiB(memory.totalMiB)}`}
                 series={series.memUsedMiB}
-                color="#60a5fa"
+                color="var(--mono-emit)"
                 bar={memory === null ? null : memory.usedPct / 100}
               />
             </div>
@@ -247,7 +247,7 @@ export function MetricsPanel({ launcher }: { launcher: LauncherController }): Re
               throughput === null ? (
                 <Badge tone="slate">还没有请求</Badge>
               ) : (
-                <Badge tone="violet">更新于 {new Date(throughput.at).toLocaleTimeString("zh-CN", { hour12: false })}</Badge>
+                <Badge tone="muted">更新于 {new Date(throughput.at).toLocaleTimeString("zh-CN", { hour12: false })}</Badge>
               )
             }
           >
@@ -259,7 +259,7 @@ export function MetricsPanel({ launcher }: { launcher: LauncherController }): Re
                 }
                 sub="来自 llama-server 日志里的 eval time 行"
                 series={series.evalTokPerSec}
-                color="#c084fc"
+                color="var(--accent)"
               />
               <StatCard
                 title="prompt 处理速度"
@@ -270,32 +270,32 @@ export function MetricsPanel({ launcher }: { launcher: LauncherController }): Re
                 }
                 sub="长 prompt 的首 token 延迟主要看它"
                 series={series.promptTokPerSec}
-                color="#f472b6"
+                color="var(--warn)"
               />
             </div>
             <dl className="mt-2.5 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] md:grid-cols-4">
               <div className="flex justify-between gap-2">
-                <dt className="text-slate-500">采样点</dt>
-                <dd className="mono text-slate-300">{series.at.length}</dd>
+                <dt className="text-[var(--text-muted)]">采样点</dt>
+                <dd className="mono text-[var(--text-secondary)]">{series.at.length}</dd>
               </div>
               <div className="flex justify-between gap-2">
-                <dt className="text-slate-500">采样中</dt>
-                <dd className="mono text-slate-300">{metrics.running ? "是" : "否"}</dd>
+                <dt className="text-[var(--text-muted)]">采样中</dt>
+                <dd className="mono text-[var(--text-secondary)]">{metrics.running ? "是" : "否"}</dd>
               </div>
               <div className="flex justify-between gap-2">
-                <dt className="text-slate-500">服务状态</dt>
-                <dd className="mono text-slate-300">{latest.serverState}</dd>
+                <dt className="text-[var(--text-muted)]">服务状态</dt>
+                <dd className="mono text-[var(--text-secondary)]">{latest.serverState}</dd>
               </div>
               <div className="flex justify-between gap-2">
-                <dt className="text-slate-500">最近采样</dt>
-                <dd className="mono text-slate-300">
+                <dt className="text-[var(--text-muted)]">最近采样</dt>
+                <dd className="mono text-[var(--text-secondary)]">
                   {new Date(latest.at).toLocaleTimeString("zh-CN", { hour12: false })}
                 </dd>
               </div>
             </dl>
           </Section>
 
-          <p className="pb-2 text-[11px] leading-5 text-slate-500">
+          <p className="pb-2 text-[11px] leading-5 text-[var(--text-muted)]">
             采样间隔 1 秒，只在打开本页时进行（切走即停，历史保留）。
             曲线里的断口表示那一刻没测到数据，不是 0。
           </p>

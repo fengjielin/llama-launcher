@@ -132,7 +132,7 @@ function Badges({
   if (presetOwned && raw !== null && raw !== undefined && raw !== "") {
     items.push({
       text: "preset 接管",
-      tone: "violet",
+      tone: "muted",
       title:
         "配置里的 presets 为某个模型定义过这个键，命令行不会再传它（实测命令行优先级更高，传了会盖掉 preset）。预加载的模型除外。",
     });
@@ -185,20 +185,20 @@ export function ParamsForm({ launcher }: { launcher: LauncherController }) {
         const open = collapsed[group.id] !== true;
         const unsupported = entries.filter((entry) => entry.supported === false).length;
         return (
-          <section key={group.id} className="rounded-lg border border-[#1e2530] bg-[#11151d]">
+          <section key={group.id} className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)]">
             <button
               type="button"
               onClick={() => setCollapsed((prev) => ({ ...prev, [group.id]: open }))}
               className="flex w-full items-center gap-2 px-3 py-2 text-left"
             >
-              <span className="text-slate-500">{open ? "▾" : "▸"}</span>
-              <span className="text-xs font-semibold text-slate-200">{group.label}</span>
-              <span className="text-[11px] text-slate-500">{entries.length} 项</span>
+              <span className="text-[var(--text-muted)]">{open ? "▾" : "▸"}</span>
+              <span className="text-xs font-semibold text-[var(--text-primary)]">{group.label}</span>
+              <span className="text-[11px] text-[var(--text-muted)]">{entries.length} 项</span>
               {unsupported > 0 ? <Badge tone="rose">{unsupported} 项不支持</Badge> : null}
             </button>
 
             {open ? (
-              <div className="border-t border-[#1e2530] px-3 py-2">
+              <div className="border-t border-[var(--border-subtle)] px-3 py-2">
                 {entries.map((entry) => {
                   const raw = config[entry.key];
                   const presetOwned = entry.presetKey !== undefined && presetKeys.has(entry.presetKey);
@@ -206,12 +206,12 @@ export function ParamsForm({ launcher }: { launcher: LauncherController }) {
                   return (
                     <div
                       key={entry.key}
-                      className="flex items-start gap-3 border-b border-[#161b24] py-2 last:border-b-0"
+                      className="flex items-start gap-3 border-b border-[var(--border-subtle)] py-2 last:border-b-0"
                       title={entry.hint ?? ""}
                     >
                       <div className="min-w-[168px] shrink-0 space-y-0.5">
-                        <div className="text-xs text-slate-300">{entry.label}</div>
-                        <div className="mono flex flex-wrap items-center gap-1 text-[10px] text-slate-500">
+                        <div className="text-xs text-[var(--text-secondary)]">{entry.label}</div>
+                        <div className="mono flex flex-wrap items-center gap-1 text-[10px] text-[var(--text-muted)]">
                           <span>{entry.resolvedFlag ?? entry.candidates[0] ?? entry.key}</span>
                           {entry.kind === "bool" ? null : entry.takesValue === false ? <span>（开关）</span> : null}
                         </div>
@@ -230,7 +230,7 @@ export function ParamsForm({ launcher }: { launcher: LauncherController }) {
         );
       })}
 
-      <p className="pb-2 text-[11px] leading-5 text-slate-500">
+      <p className="pb-2 text-[11px] leading-5 text-[var(--text-muted)]">
         提示：把鼠标停在任意一行上会显示该参数的踩坑说明。凡是标了「本版本不支持」的项，说明当前 llama.cpp 的
         <span className="mono"> --help </span>
         里没有对应参数名——启动器不会硬传，只会在决策表里记一条原因。

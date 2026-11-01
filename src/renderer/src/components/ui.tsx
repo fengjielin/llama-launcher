@@ -1,21 +1,38 @@
 import type { ReactNode } from "react";
 
-export type Tone = "slate" | "sky" | "emerald" | "amber" | "rose" | "violet";
+export type Tone = "slate" | "accent" | "emerald" | "amber" | "rose" | "muted";
+
+/** @deprecated 旧名 sky → accent；violet → muted。保留别名避免调用方一次性炸裂。 */
+export type LegacyTone = Tone | "sky" | "violet";
+
+function resolveTone(tone: LegacyTone): Tone {
+  if (tone === "sky") return "accent";
+  if (tone === "violet") return "muted";
+  return tone;
+}
 
 const BADGE_TONE: Record<Tone, string> = {
-  slate: "bg-slate-500/10 text-slate-300 ring-slate-500/30",
-  sky: "bg-sky-500/10 text-sky-300 ring-sky-500/30",
-  emerald: "bg-emerald-500/10 text-emerald-300 ring-emerald-500/30",
-  amber: "bg-amber-500/10 text-amber-300 ring-amber-500/30",
-  rose: "bg-rose-500/10 text-rose-300 ring-rose-500/30",
-  violet: "bg-violet-500/10 text-violet-300 ring-violet-500/30",
+  slate: "bg-[color-mix(in_srgb,var(--text-muted)_12%,transparent)] text-[var(--text-secondary)] ring-[color-mix(in_srgb,var(--text-muted)_30%,transparent)]",
+  accent: "bg-[var(--accent-soft-bg)] text-[var(--accent)] ring-[var(--accent-soft-border)]",
+  emerald: "bg-[color-mix(in_srgb,var(--ok)_12%,transparent)] text-[var(--ok)] ring-[color-mix(in_srgb,var(--ok)_35%,transparent)]",
+  amber: "bg-[color-mix(in_srgb,var(--warn)_12%,transparent)] text-[var(--warn)] ring-[color-mix(in_srgb,var(--warn)_35%,transparent)]",
+  rose: "bg-[var(--flash-danger-bg)] text-[var(--danger)] ring-[var(--flash-danger-border)]",
+  muted: "bg-[color-mix(in_srgb,var(--text-muted)_10%,transparent)] text-[var(--text-muted)] ring-[color-mix(in_srgb,var(--text-muted)_28%,transparent)]",
 };
 
-export function Badge({ tone = "slate", title, children }: { tone?: Tone; title?: string; children: ReactNode }) {
+export function Badge({
+  tone = "slate",
+  title,
+  children,
+}: {
+  tone?: LegacyTone;
+  title?: string;
+  children: ReactNode;
+}) {
   return (
     <span
       title={title}
-      className={`inline-flex shrink-0 items-center rounded px-1.5 py-[1px] text-[11px] leading-4 ring-1 ring-inset ${BADGE_TONE[tone]}`}
+      className={`inline-flex shrink-0 items-center rounded px-1.5 py-[1px] text-[11px] leading-4 ring-1 ring-inset ${BADGE_TONE[resolveTone(tone)]}`}
     >
       {children}
     </span>
@@ -25,10 +42,11 @@ export function Badge({ tone = "slate", title, children }: { tone?: Tone; title?
 type ButtonVariant = "default" | "primary" | "danger" | "ghost";
 
 const BUTTON_VARIANT: Record<ButtonVariant, string> = {
-  default: "bg-[#1b2230] text-slate-200 ring-1 ring-inset ring-[#2a3444] hover:bg-[#232c3d]",
-  primary: "bg-sky-600 text-white hover:bg-sky-500",
-  danger: "bg-rose-600 text-white hover:bg-rose-500",
-  ghost: "bg-transparent text-slate-400 hover:bg-[#1b2230] hover:text-slate-200",
+  default:
+    "bg-[var(--bg-elevated)] text-[var(--text-primary)] ring-1 ring-inset ring-[var(--border-strong)] hover:bg-[color-mix(in_srgb,var(--bg-elevated)_70%,var(--text-muted))]",
+  primary: "bg-[var(--accent-solid)] text-white hover:bg-[var(--accent-solid-hover)]",
+  danger: "bg-[color-mix(in_srgb,var(--danger)_75%,#7f1d1d)] text-white hover:bg-[var(--danger)]",
+  ghost: "bg-transparent text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]",
 };
 
 export function Button({
@@ -76,7 +94,7 @@ export function Toggle({
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={`relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-        checked ? "bg-sky-600" : "bg-[#2a3444]"
+        checked ? "bg-[var(--accent-solid)]" : "bg-[var(--border-strong)]"
       }`}
     >
       <span
@@ -85,6 +103,9 @@ export function Toggle({
     </button>
   );
 }
+
+const FIELD =
+  "rounded-md border border-[var(--border-strong)] bg-[var(--bg-input)] px-2 py-1 text-xs text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50";
 
 export function TextInput({
   value,
@@ -109,9 +130,7 @@ export function TextInput({
       value={value}
       placeholder={placeholder}
       onChange={(event) => onChange(event.target.value)}
-      className={`min-w-0 flex-1 rounded-md border border-[#2a3444] bg-[#0d1117] px-2 py-1 text-xs text-slate-200 outline-none transition-colors placeholder:text-slate-600 focus:border-sky-600 disabled:cursor-not-allowed disabled:opacity-50 ${
-        mono ? "mono" : ""
-      } ${className}`}
+      className={`min-w-0 flex-1 ${FIELD} ${mono ? "mono" : ""} ${className}`}
     />
   );
 }
@@ -145,7 +164,7 @@ export function NumberInput({
         const parsed = Number(raw);
         onChange(Number.isFinite(parsed) ? parsed : null);
       }}
-      className="w-28 min-w-0 rounded-md border border-[#2a3444] bg-[#0d1117] px-2 py-1 text-xs text-slate-200 outline-none focus:border-sky-600 disabled:cursor-not-allowed disabled:opacity-50"
+      className={`w-28 min-w-0 ${FIELD}`}
     />
   );
 }
@@ -168,7 +187,7 @@ export function Select({
       disabled={disabled}
       value={value}
       onChange={(event) => onChange(event.target.value)}
-      className={`min-w-0 rounded-md border border-[#2a3444] bg-[#0d1117] px-2 py-1 text-xs text-slate-200 outline-none focus:border-sky-600 disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
+      className={`min-w-0 ${FIELD} ${className}`}
     >
       {options.map((option) => (
         <option key={option.value} value={option.value}>
@@ -191,9 +210,9 @@ export function Section({
   className?: string;
 }) {
   return (
-    <section className={`rounded-lg border border-[#1e2530] bg-[#11151d] ${className}`}>
-      <header className="flex items-center justify-between gap-2 border-b border-[#1e2530] px-3 py-2">
-        <h2 className="text-xs font-semibold tracking-wide text-slate-300">{title}</h2>
+    <section className={`rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] ${className}`}>
+      <header className="flex items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-3 py-2">
+        <h2 className="text-xs font-semibold tracking-wide text-[var(--text-secondary)]">{title}</h2>
         {right}
       </header>
       <div className="px-3 py-2.5">{children}</div>
